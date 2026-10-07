@@ -4,6 +4,147 @@
 
 #include "hardware/gpio.h"
 
+// ============================================================================
+//  CUSTOM: Gear system + smart start + randomized timings
+//
+//  - Macros whose label starts with "G " (e.g. "G DP right") use the gear system:
+//      * Hold an attack button, then press the macro button, keep both held 2s
+//        -> that attack becomes the macro's gear (no move, attack not sent).
+//      * Macro alone -> plays the motion; the attack in the attack step is
+//        replaced by the selected gear (default = what you recorded).
+//      * Smart start: if the first direction of the macro is held now, or was
+//        released within SKIP_WINDOW_US, the first step is skipped (no dash).
+//  - ALL macros get randomized step durations:
+//      * direction-only step ........ 1.5 - 3 frames
+//      * step with an attack ........ 3 - 7 frames
+//      * OD macro (2+ attacks in one step): attack step 2 - 5 frames,
+//        direction steps after the attack (block) 4 - 8 frames
+//      * empty steps keep their recorded duration
+//  Gear selections reset to the recorded default when the device is unplugged.
+// ============================================================================
+
+namespace {
+    // ---- Tunables (change these numbers if needed) ----
+    constexpr uint32_t FRAME_US        = 16667;           // 1 frame at 60fps
+    constexpr uint64_t GEAR_HOLD_US    = 2000000;         // 2 seconds
+    constexpr uint64_t SKIP_WINDOW_US  = 9 * FRAME_US;    // smart-start window
+
+    constexpr uint32_t DIR_MIN_US      = FRAME_US * 3 / 2; // 1.5f
+    constexpr uint32_t DIR_MAX_US      = FRAME_US * 3;     // 3f
+    constexpr uint32_t ATK_MIN_US      = FRAME_US * 3;     // 3f
+    constexpr uint32_t ATK_MAX_US      = FRAME_US * 7;     // 7f
+    constexpr uint32_t OD_ATK_MIN_US   = FRAME_US * 2;     // 2f
+    constexpr uint32_t OD_ATK_MAX_US   = FRAME_US * 5;     // 5f
+    constexpr uint32_t BLOCK_MIN_US    = FRAME_US * 4;     // 4f
+    constexpr uint32_t BLOCK_MAX_US    = FRAME_US * 8;     // 8f
+
+    // LP=L3, MP=B4(Y), HP=R1, LK=B1(A), MK=B2(B), HK=R2
+    constexpr uint32_t ATTACK_MASK = GAMEPAD_MASK_L3 | GAMEPAD_MASK_B4 | GAMEPAD_MASK_R1 |
+                                     GAMEPAD_MASK_B1 | GAMEPAD_MASK_B2 | GAMEPAD_MASK_R2;
+    constexpr uint32_t DIR_MASK    = GAMEPAD_MASK_DU | GAMEPAD_MASK_DD |
+                                     GAMEPAD_MASK_DL | GAMEPAD_MASK_DR;
+
+    constexpr int MAX_STEPS = 64;
+
+    // ---- State ----
+    uint32_t rngState = 0x12345678;
+    uint32_t stepDuration[MAX_STEPS];
+    uint32_t gearMask[MAX_MACRO_LIMIT] = {0};   // 0 = use recorded attack
+
+    // last time each physical direction was held: U, D, L, R
+    uint64_t dirLastHeld[4] = {0, 0, 0, 0};
+
+    int      gearPendingMacro = -1;
+    uint32_t gearPendingMask  = 0;
+    uint64_t gearPendingStart = 0;
+    bool     gearArmed        = false;
+
+    uint32_t nextRandom() {
+        uint32_t x = rngState;
+        x ^= x << 13;
+        x ^= x >> 17;
+        x ^= x << 5;
+        rngState = (x == 0) ? 1 : x;
+        return rngState;
+    }
+
+    uint32_t randomRange(uint32_t lo, uint32_t hi) {
+        return lo + (nextRandom() % (hi - lo + 1));
+    }
+
+    bool isGearMacro(const Macro& macro) {
+        return macro.macroLabel[0] == 'G' && macro.macroLabel[1] == ' ';
+    }
+
+    int stepCount(const Macro& macro) {
+        int n = (int)macro.macroInputs_count;
+        return n > MAX_STEPS ? MAX_STEPS : n;
+    }
+
+    // Randomize the duration of every step for this run of the macro
+    void prepareSteps(const Macro& macro, uint64_t now) {
+        rngState ^= (uint32_t)now;
+        if (rngState == 0) rngState = 1;
+
+        int n = stepCount(macro);
+        bool isOD = false;
+        int firstAttack = -1;
+        for (int i = 0; i < n; i++) {
+            uint32_t attacks = macro.macroInputs[i].buttonMask & ATTACK_MASK;
+            if (attacks) {
+                if (firstAttack < 0) firstAttack = i;
+                if (__builtin_popcount(attacks) >= 2) isOD = true;
+            }
+        }
+
+        for (int i = 0; i < n; i++) {
+            uint32_t mask = macro.macroInputs[i].buttonMask;
+            if (mask & ATTACK_MASK) {
+                stepDuration[i] = isOD ? randomRange(OD_ATK_MIN_US, OD_ATK_MAX_US)
+                                       : randomRange(ATK_MIN_US, ATK_MAX_US);
+            } else if (mask & DIR_MASK) {
+                if (isOD && firstAttack >= 0 && i > firstAttack) {
+                    stepDuration[i] = randomRange(BLOCK_MIN_US, BLOCK_MAX_US);
+                } else {
+                    stepDuration[i] = randomRange(DIR_MIN_US, DIR_MAX_US);
+                }
+            } else {
+                stepDuration[i] = macro.macroInputs[i].duration; // empty step: keep
+            }
+        }
+    }
+
+    uint32_t stepHoldTime(const Macro& macro, int pos) {
+        uint32_t hold = stepDuration[pos] + macro.macroInputs[pos].waitDuration;
+        return hold == 0 ? INPUT_HOLD_US : hold;
+    }
+
+    // Smart start: skip the first direction if it is held / was just released
+    int startPosition(const Macro& macro, uint64_t now) {
+        if (!isGearMacro(macro) || stepCount(macro) < 2) return 0;
+        uint32_t first = macro.macroInputs[0].buttonMask;
+        if ((first & ATTACK_MASK) || !(first & DIR_MASK)) return 0;
+
+        const uint32_t bits[4] = {GAMEPAD_MASK_DU, GAMEPAD_MASK_DD,
+                                  GAMEPAD_MASK_DL, GAMEPAD_MASK_DR};
+        for (int d = 0; d < 4; d++) {
+            if (first & bits[d]) {
+                if (dirLastHeld[d] == 0 || (now - dirLastHeld[d]) > SKIP_WINDOW_US) {
+                    return 0;
+                }
+            }
+        }
+        return 1;
+    }
+
+    void trackDirections(uint8_t dpad, uint64_t now) {
+        if (dpad & GAMEPAD_MASK_UP)    dirLastHeld[0] = now;
+        if (dpad & GAMEPAD_MASK_DOWN)  dirLastHeld[1] = now;
+        if (dpad & GAMEPAD_MASK_LEFT)  dirLastHeld[2] = now;
+        if (dpad & GAMEPAD_MASK_RIGHT) dirLastHeld[3] = now;
+    }
+}
+
 bool InputMacro::available() {
     // Macro Button initialized by void Gamepad::setup()
     GpioMappingInfo* pinMappings = Storage::getInstance().getProfilePinMappings();
@@ -68,6 +209,13 @@ void InputMacro::setup() {
     }
     boardLedEnabled = false;
     prevMacroInputPressed = false;
+
+    // CUSTOM: seed random generator and clear gear state
+    rngState = (uint32_t)getMicro() ^ 0x9E3779B9u;
+    if (rngState == 0) rngState = 1;
+    for (int i = 0; i < MAX_MACRO_LIMIT; i++) gearMask[i] = 0;
+    gearPendingMacro = -1;
+
     reset();
 }
 
@@ -86,11 +234,11 @@ void InputMacro::reset() {
 }
 
 void InputMacro::restart(Macro& macro) {
+    // CUSTOM: new random timings + smart start on every repeat
     macroStartTime = currentMicros;
-    macroInputPosition = 0;
-    MacroInput& newMacroInput = macro.macroInputs[macroInputPosition];
-    uint32_t newMacroInputDuration = newMacroInput.duration + newMacroInput.waitDuration;
-    macroInputHoldTime = newMacroInputDuration <= 0 ? INPUT_HOLD_US : newMacroInputDuration;
+    prepareSteps(macro, currentMicros);
+    macroInputPosition = startPosition(macro, currentMicros);
+    macroInputHoldTime = stepHoldTime(macro, macroInputPosition);
 }
 
 void InputMacro::checkMacroPress() {
@@ -127,6 +275,12 @@ void InputMacro::checkMacroAction() {
         macroPosition = pressedMacro; // move our position to that macro
     }
 
+    // CUSTOM: guard against reading macroList[-1] when nothing is pressed
+    if (macroPosition < 0) {
+        prevMacroInputPressed = macroInputPressed;
+        return;
+    }
+
     bool newPress = macroInputPressed && (prevMacroInputPressed ^ macroInputPressed);
 
     // Check to see if we should change the current macro (or turn off based on input)
@@ -150,15 +304,19 @@ void InputMacro::checkMacroAction() {
     }
 
     prevMacroInputPressed = macroInputPressed;
-    if (!isMacroRunning && isMacroTriggerHeld) {
+    if (!isMacroRunning && isMacroTriggerHeld && pressedMacro >= 0) {
         // New Macro to run
         macroPosition = pressedMacro; // Set current macro
         Macro& macro = inputMacroOptions->macroList[macroPosition];
-        MacroInput& macroInput = macro.macroInputs[macroInputPosition];
-        uint32_t macroInputDuration = macroInput.duration + macroInput.waitDuration;
-        macroInputHoldTime = macroInputDuration <= 0 ? INPUT_HOLD_US : macroInputDuration;
+        uint64_t now = getMicro();
+
+        // CUSTOM: random timings + smart start
+        prepareSteps(macro, now);
+        macroInputPosition = startPosition(macro, now);
+        macroInputHoldTime = stepHoldTime(macro, macroInputPosition);
+
         isMacroRunning = true;
-        macroStartTime = getMicro(); // current time
+        macroStartTime = now; // current time
     }
 }
 
@@ -177,7 +335,6 @@ void InputMacro::runCurrentMacro() {
         return;
     }
 
-    MacroInput& macroInput = macro.macroInputs[macroInputPosition];
     Gamepad * gamepad = Storage::getInstance().GetGamepad();
     currentMicros = getMicro();
 
@@ -203,23 +360,28 @@ void InputMacro::runCurrentMacro() {
     if ((currentMicros - macroStartTime) >= macroInputHoldTime) {
         macroStartTime = currentMicros;
         macroInputPosition++;
-        
-        if (macroInputPosition >= (macro.macroInputs_count)) {
+
+        if ((int)macroInputPosition >= stepCount(macro)) {
             if ( macro.macroType == ON_PRESS ) {
                 reset(); // On press = no more macro
+                return;
             } else {
                 restart(macro); // On Hold-Repeat or On Toggle = start macro again
             }
         } else {
-            MacroInput& newMacroInput = macro.macroInputs[macroInputPosition];
-            uint32_t newMacroInputDuration = newMacroInput.duration + newMacroInput.waitDuration;
-            macroInputHoldTime = newMacroInputDuration <= 0 ? INPUT_HOLD_US : newMacroInputDuration;
+            macroInputHoldTime = stepHoldTime(macro, macroInputPosition);
         }
     }
 
+    // CUSTOM: read the CURRENT step (after any advance) and apply the gear
+    int pos = (int)macroInputPosition;
+    uint32_t buttonMask = macro.macroInputs[pos].buttonMask;
+    if (isGearMacro(macro) && gearMask[macroPosition] && (buttonMask & ATTACK_MASK)) {
+        buttonMask = (buttonMask & ~ATTACK_MASK) | gearMask[macroPosition];
+    }
+
     // Check if we should still hold this macro input based on duration
-    if ((currentMicros - macroStartTime) <= macroInput.duration) {
-        uint32_t buttonMask = macroInput.buttonMask;
+    if ((currentMicros - macroStartTime) <= stepDuration[pos]) {
         if (buttonMask & GAMEPAD_MASK_DU) {
             gamepad->state.dpad |= GAMEPAD_MASK_UP;
         }
@@ -253,7 +415,50 @@ void InputMacro::preprocess()
         }
     }
 
+    // CUSTOM: remember when each direction was last physically held
+    Gamepad * gamepad = Storage::getInstance().GetGamepad();
+    uint64_t now = getMicro();
+    trackDirections(gamepad->state.dpad, now);
+
     checkMacroPress();
+
+    // CUSTOM: gear selection (attack held + G macro held for 2 seconds)
+    uint32_t attackHeld = gamepad->state.buttons & ATTACK_MASK;
+    Mask_t allPins = gamepad->debouncedGpio;
+
+    if (gearPendingMacro >= 0) {
+        bool pinHeld = (allPins & macroPinMasks[gearPendingMacro]) != 0;
+        if (!pinHeld && attackHeld == 0) {
+            // Both released: leave gear mode, continue normally
+            gearPendingMacro = -1;
+            prevMacroInputPressed = (pressedMacro != -1);
+        } else {
+            // Changed or released one of them: cancel the timer
+            if (!pinHeld || attackHeld != gearPendingMask) {
+                gearArmed = false;
+            }
+            if (gearArmed && (now - gearPendingStart) >= GEAR_HOLD_US) {
+                gearMask[gearPendingMacro] = gearPendingMask;
+                gearArmed = false;
+            }
+            gamepad->state.buttons &= ~ATTACK_MASK; // attack never reaches the game
+            prevMacroInputPressed = (pressedMacro != -1);
+            return;                                  // macro does not fire
+        }
+    }
+
+    if (!isMacroRunning && pressedMacro >= 0 && !prevMacroInputPressed && attackHeld &&
+            isGearMacro(inputMacroOptions->macroList[pressedMacro]) &&
+            !inputMacroOptions->macroList[pressedMacro].useMacroTriggerButton) {
+        gearPendingMacro = pressedMacro;
+        gearPendingMask  = attackHeld;
+        gearPendingStart = now;
+        gearArmed        = (__builtin_popcount(attackHeld) == 1); // only one attack allowed
+        gamepad->state.buttons &= ~ATTACK_MASK;
+        prevMacroInputPressed = true;
+        return;
+    }
+
     checkMacroAction();
     runCurrentMacro();
 }
@@ -291,3 +496,4 @@ void InputMacro::reinit() {
         }
     }
 }
+
