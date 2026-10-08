@@ -16,6 +16,11 @@
 #include "enums.h"
 #include "helper.h"
 
+// CUSTOM: Viper mode state (set by the input macro add-on)
+extern volatile bool g_viperActive;
+extern volatile bool g_viperFacingRight;
+extern volatile bool g_viperBurnout;
+
 #define FRAME_MAX 100
 #define AL_ROW	5
 #define AL_COL	8
@@ -571,6 +576,24 @@ void NeoPicoLEDAddon::process() {
 
 	// Copy Animation Station to NeoPico w/ Brightness Modification
     as.ApplyBrightness(&frame[0]);
+
+    // CUSTOM: Viper mode colors - light cyan (red in burnout), side arrow + pressed = white
+    if (g_viperActive) {
+        float bx = as.GetBrightnessX();
+        LEDFormat fmt = neopico.GetFormat();
+        uint32_t base  = (g_viperBurnout ? RGB(255, 0, 0) : RGB(90, 210, 255)).value(fmt, bx);
+        uint32_t white = RGB(255, 255, 255).value(fmt, bx);
+        uint32_t sideMask = g_viperFacingRight ? GAMEPAD_MASK_DL : GAMEPAD_MASK_DR;
+        for (auto &row : matrix.pixels) {
+            for (auto &pixel : row) {
+                if (pixel.index < 0 || pixel.mask == 0) continue;
+                bool lit = (buttonState & pixel.mask) || (pixel.mask == sideMask);
+                uint32_t c = lit ? white : base;
+                for (auto pos : pixel.positions)
+                    if (pos < 100) frame[pos] = c;
+            }
+        }
+    }
 
     // Apply the player LEDs to our first 4 leds if we're in NEOPIXEL mode
     if (ledOptions.pledType == PLED_TYPE_RGB) {
