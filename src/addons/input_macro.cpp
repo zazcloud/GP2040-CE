@@ -124,6 +124,12 @@ namespace {
 
     bool viperMode = false;
 
+    // Macro on/off button: GPIO pin 20 (keep it mapped to any button, e.g. A1;
+    // that button is not sent to the game). Macros start ON after every power-up.
+    constexpr uint32_t TOGGLE_PIN_MASK = 1u << 20;
+    bool macrosOn = true;
+    bool prevTogglePin = false;
+
     bool isGearMacro(const Macro& macro) {
         return macro.macroLabel[0] == 'G' && macro.macroLabel[1] == ' ';
     }
@@ -698,7 +704,7 @@ static void detectViperMode(MacroOptions* opts) {
     for (int i = 0; i < MAX_MACRO_LIMIT; i++) {
         if (isViperMarker(opts->macroList[i])) { viperMode = true; break; }
     }
-    g_viperActive = viperMode;
+    g_viperActive = viperMode && macrosOn;
     g_viperFacingRight = V.facingRight;
     g_viperBurnout = V.burnout;
 }
@@ -960,9 +966,33 @@ void InputMacro::preprocess()
         }
     }
 
-    // CUSTOM: remember when each direction was last physically held
     Gamepad * gamepad = Storage::getInstance().GetGamepad();
     uint64_t now = getMicro();
+
+    // CUSTOM: pin 20 turns all macros on/off
+    {
+        bool t = (gamepad->debouncedGpio & TOGGLE_PIN_MASK) != 0;
+        if (t) {
+            GpioMappingInfo* pm = Storage::getInstance().getProfilePinMappings();
+            // hide the button pin 20 is mapped to, so the game never sees it
+            if (pm[20].action == GpioAction::BUTTON_PRESS_A1) gamepad->state.buttons &= ~GAMEPAD_MASK_A1;
+            if (pm[20].action == GpioAction::BUTTON_PRESS_A2) gamepad->state.buttons &= ~GAMEPAD_MASK_A2;
+        }
+        if (t && !prevTogglePin) {
+            macrosOn = !macrosOn;
+            if (!macrosOn) {
+                reset();
+                V.playing = false; V.win = W_NONE; V.chordPending = false; V.lv2Pending = false;
+                V.suppress = 0;
+                gearPendingMacro = -1;
+            }
+            g_viperActive = viperMode && macrosOn;
+        }
+        prevTogglePin = t;
+        if (!macrosOn) return;
+    }
+
+    // CUSTOM: remember when each direction was last physically held
     trackDirections(gamepad->state.dpad, now);
 
     // CUSTOM: Viper engine (runs first, owns the output while a Viper move plays)

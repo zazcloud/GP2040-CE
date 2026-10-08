@@ -577,11 +577,11 @@ void NeoPicoLEDAddon::process() {
 	// Copy Animation Station to NeoPico w/ Brightness Modification
     as.ApplyBrightness(&frame[0]);
 
-    // CUSTOM: Viper mode colors - light cyan (red in burnout), side arrow + pressed = white
+    // CUSTOM: Viper mode colors - green (red in burnout), side arrow + pressed = white
     if (g_viperActive) {
         float bx = as.GetBrightnessX();
         LEDFormat fmt = neopico.GetFormat();
-        uint32_t base  = (g_viperBurnout ? RGB(255, 0, 0) : RGB(90, 210, 255)).value(fmt, bx);
+        uint32_t base  = (g_viperBurnout ? RGB(255, 0, 0) : RGB(0, 255, 0)).value(fmt, bx);
         uint32_t white = RGB(255, 255, 255).value(fmt, bx);
         uint32_t sideMask = g_viperFacingRight ? GAMEPAD_MASK_DL : GAMEPAD_MASK_DR;
         for (auto &row : matrix.pixels) {
