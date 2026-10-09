@@ -408,18 +408,18 @@ namespace {
     }
 
     void seqJump()                  { vClear(); addArrows({D_, DF, F_, UF}); vPush(U_, 0, vArrow(), FL_JUMP); }
-    void seqSeismo(uint32_t punches) {
-        vClear(); addArrows({F_, D_, DF, F_});
-        vPush(UF, punches, vArrow(), FL_OPEN_LOOP);
-        vPush(F_, punches, vBtn());
+    void seqSeismo(uint32_t punches) {          // jump-cancel seismo
+        vClear();
+        vPush(F_, 0, randomRange(F10(60), F10(110)));
+        addArrows({D_, DF, F_, UF});
+        vPush(U_, punches, vBtn(), FL_OPEN_LOOP);
     }
-    void seqFeint() {
-        vClear(); addArrows({F_, D_, DF, F_, UF});
-        uint32_t total = randomRange(F10(40), F10(100));
-        uint32_t minA = total / 2 + 1, maxA = total - F10(10);
-        uint32_t a = (minA > maxA) ? maxA : randomRange(minA, maxA);
-        vPush(F_, HP | LK, a);
-        vPush(F_, coin() ? LK : HP, total - a);
+    void seqFeint() {                           // jump-cancel seismo feint
+        vClear();
+        vPush(F_, 0, randomRange(F10(60), F10(110)));
+        addArrows({D_, DF, F_, UF});
+        vPush(U_, HP | LK, randomRange(F10(40), F10(70)));
+        vPush(U_, coin() ? LK : HP, randomRange(F10(50), F10(90)));
     }
     void seqBurn(uint32_t kicks) {
         vClear(); addArrows({D_, DF, F_, UF}); vPush(U_, 0, vArrow(), FL_JUMP);
@@ -436,8 +436,8 @@ namespace {
         addArrows({D_, DB, B_});
         vPush(UB, HP, randomRange(F10(40), F10(70)));
         uint8_t d6 = coin() ? B_ : UB;
-        vPush(d6, HP | LK, randomRange(F10(50), F10(70)));
-        vPush(coin() ? d6 : N_, LK, randomRange(F10(40), F10(80)));   // kick only, arrow 50/50
+        vPush(d6, HP | LK, randomRange(F10(100), F10(140)));
+        vPush(coin() ? d6 : N_, LK, randomRange(F10(80), F10(160)));  // kick only, arrow 50/50
     }
     void seqCrouchHP() {                        // cr.HP -> thunder dash feint
         vClear();
@@ -446,7 +446,7 @@ namespace {
         vPush(B_, 0, randomRange(F10(20), F10(50)));
         uint32_t s4 = randomRange(F10(15), F10(25));
         vPush(B_, HP, s4);
-        vPush(B_, HP | LK, s4 * 2);                   // twice as long as step 4
+        vPush(B_, HP | LK, s4 * 4);                   // 4x step 4 (6-10f)
         vPush(B_, LK, randomRange(F10(20), F10(60))); // punch released, kick still held
     }
     void seqSeismoNormal(uint32_t punches) {    // plain seismo: → ↘ → + punch
