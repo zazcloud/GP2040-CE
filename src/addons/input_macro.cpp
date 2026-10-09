@@ -331,6 +331,7 @@ namespace {
         bool pendKick = false;
         uint64_t pendAt = 0;
         uint64_t hkStart = 0;         // st.HK press (OD burning kick timing)
+        uint64_t mkStart = 0;         // MK press (burning kick timing)
         uint64_t delayedAt = 0;       // a built sequence waiting to start
         uint64_t qcbBlockUntil = 0;   // after a qcb macro (Macro 1/2): no st.HP macro for 57f
         uint32_t prevQcbPins = 0;
@@ -808,6 +809,13 @@ namespace {
                         V.chordPending = false;
                         if (V.win == W_LOOP && loopSchedule(m, f, now)) {
                             // waits for its time below (hold keeps going)
+                        } else if (V.win == W_MK && !((m & LP) && (m & LK)) &&
+                                   (m & KICK_MASK) && (!(m & PUNCH_MASK) || (f & KICK_MASK))) {
+                            // MK -> kick(s): burning kick starts 15f after the MK press (MK hold keeps going)
+                            uint32_t k = m & KICK_MASK;
+                            V.pendMask = popcount32(k) >= 2 ? (MK | HK) : k;
+                            V.pendKick = true;
+                            V.pendAt = V.mkStart + 15 * FRAME_US;
                         } else if (V.win == W_HK && (m & ATTACK_MASK) == LK) {
                             // st.HK -> LK: thunder (MP+HP) + Level 2 window, starts 12f after the HK press
                             closeWindow(now);
@@ -836,10 +844,10 @@ namespace {
                 } else if (ufRising && V.win == W_HK) {   // jump only after st.HK
                     if (resolveWindow(0, 0, true, now) && runSeq(gp, now, rel)) return true;
                 }
-                if (V.win == W_LOOP && V.pendMask && !V.playing && now >= V.pendAt) {
-                    uint32_t pm = V.pendMask; bool kick = V.pendKick;
+                if ((V.win == W_LOOP || V.win == W_MK) && V.pendMask && !V.playing && now >= V.pendAt) {
+                    uint32_t pm = V.pendMask; bool kick = V.pendKick; bool mk = (V.win == W_MK);
                     closeWindow(now);
-                    if (kick) seqBurn(pm); else seqLoopJC(pm);
+                    if (mk) seqMKBurn(pm); else if (kick) seqBurn(pm); else seqLoopJC(pm);
                     startSeq(now, 0, 0); V.seqTrigger = 0;
                     if (runSeq(gp, now, rel)) return true;
                 }
@@ -890,7 +898,7 @@ namespace {
             } else if ((r & ATTACK_MASK) == MK && !(phys & ATTACK_MASK & ~MK)) {
                 V.win = W_MK; V.winDeadline = now + randomRange(V_WIN_MK_MIN, V_WIN_MK_MAX);
                 V.winGuard = true; V.seqTrigger = MK; V.guardUntil = now + V_CHORD_US;
-                V.mkDir = (rel & RD) ? D_ : N_; V.holdFrom = now;
+                V.mkDir = (rel & RD) ? D_ : N_; V.holdFrom = now; V.mkStart = now;
             } else if ((r & ATTACK_MASK) == HK && !(phys & ATTACK_MASK & ~HK) && (rel == N_ || rel == B_)) {
                 V.win = W_HK; V.winDeadline = now + V_WIN_HK_US;
                 V.winGuard = true; V.seqTrigger = HK; V.guardUntil = now + V_CHORD_US;
