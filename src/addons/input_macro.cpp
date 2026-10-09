@@ -473,18 +473,22 @@ namespace {
         vPush(DF, 0, randomRange(F10(12), F10(20)));
         vPush(F_, punches, vBtn(), FL_OPEN_LOOP);
     }
-    // after MK: ↓ ↘ → ↗ (1.2-2f each), then the button on N
+    // after MK: ↓ ↘ → ↗ (1.2-2f each), then the button on ↑ (straight up)
     void mkMotion() {
         vClear();
         for (uint8_t d : {D_, DF, F_, UF}) vPush(d, 0, randomRange(F10(12), F10(20)));
     }
-    void seqMKSeismo(uint32_t punches) { mkMotion(); vPush(N_, punches, vBtn(), FL_OPEN_LOOP | FL_BACK); }
+    void seqMKSeismo(uint32_t punches) { mkMotion(); vPush(U_, punches, vBtn(), FL_OPEN_LOOP | FL_BACK); }
     void seqMKFeint() {
         mkMotion();
-        vPush(N_, HP | LK, randomRange(F10(40), F10(70)));
-        vPush(N_, coin() ? LK : HP, randomRange(F10(50), F10(90)));
+        vPush(U_, HP | LK, randomRange(F10(40), F10(70)));
+        vPush(U_, coin() ? LK : HP, randomRange(F10(50), F10(90)));
     }
-    void seqMKBurn(uint32_t kicks) { mkMotion(); vPush(N_, kicks, vBtn(), FL_LOCK); }
+    void seqMKBurn(uint32_t kicks) {            // ↑ alone (lock starts after it), then N + kick
+        mkMotion();
+        vPush(U_, 0, randomRange(F10(12), F10(20)), FL_JUMP);
+        vPush(N_, kicks, vBtn());
+    }
     void superArrowsAndFinish(std::initializer_list<uint8_t> dirs, uint8_t lastDir, uint32_t btn) {
         vClear();
         int n = (int)dirs.size();
