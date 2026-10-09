@@ -326,6 +326,7 @@ namespace {
         bool superCancel = false;     // a macro super cancelled the loop this poll
         bool loopBack = false;        // ← releases this loop hold (↙ always does)
         bool prevQcb = false;
+        bool nextAfterBurn = false, afterBurn = false;
         bool rawPending = false;      // your own seismo: punch held back up to 3f to catch OD
         uint32_t rawMask = 0;
         uint64_t rawStart = 0;
@@ -438,8 +439,10 @@ namespace {
         vPush(U_, HP | LK, randomRange(F10(40), F10(70)));
         vPush(U_, coin() ? LK : HP, randomRange(F10(50), F10(90)));
     }
-    void seqBurn(uint32_t kicks) {
-        vClear(); addArrows({D_, DF, F_, UF}); vPush(U_, 0, vArrow(), FL_JUMP);
+    void seqBurn(uint32_t kicks) {              // jump cancel burning kick: ↓ ↘ → ↗ ↑ (1.2-2f), then N + kick
+        vClear();
+        for (uint8_t d : {D_, DF, F_, UF}) vPush(d, 0, randomRange(F10(12), F10(20)));
+        vPush(U_, 0, randomRange(F10(12), F10(20)));   // no jump lock after a burning kick
         vPush(N_, kicks, vBtn());
     }
     void seqHKThunder() {                       // st.HK + Macro 1: jump cancel thunder dash, no LK
@@ -488,9 +491,9 @@ namespace {
         vPush(U_, HP | LK, randomRange(F10(40), F10(70)));
         vPush(U_, coin() ? LK : HP, randomRange(F10(50), F10(90)));
     }
-    void seqMKBurn(uint32_t kicks) {            // ↑ alone (lock starts after it), then N + kick
+    void seqMKBurn(uint32_t kicks) {            // ↑ alone, then N + kick (no jump lock)
         mkMotion();
-        vPush(U_, 0, randomRange(F10(12), F10(20)), FL_JUMP);
+        vPush(U_, 0, randomRange(F10(12), F10(20)));
         vPush(N_, kicks, vBtn());
     }
     void superArrowsAndFinish(std::initializer_list<uint8_t> dirs, uint8_t lastDir, uint32_t btn) {
@@ -524,6 +527,7 @@ namespace {
         V.guardUntil = now + guardUs;
         V.bufMask = 0; V.bufFirst = 0; V.bufJump = false;
         V.chordPending = false;
+        V.afterBurn = V.nextAfterBurn; V.nextAfterBurn = false;
         if (V.seqLen > 0 && (V.seq[0].flags & FL_JUMP)) setLock(now + V.seq[0].dur + V_JUMP_LOCK_US);
     }
 
@@ -692,6 +696,15 @@ namespace {
         bool locked = now < V.jumpLockUntil;
         bool holding = !V.playing && (V.win == W_LOOP || V.win == W_MK);   // we own the stick
         if (upRising && !V.playing && !holding) setLock(now + V_JUMP_LOCK_US);   // you jumped
+        // after a jump cancel burning kick: HK opens the HK window even during the lock
+        if (locked && V.afterBurn && !V.playing && V.win == W_NONE && !V.rawPending &&
+                (rising & ATTACK_MASK) == HK && !(phys & ATTACK_MASK & ~HK)) {
+            V.afterBurn = false;
+            V.win = W_HK; V.winDeadline = now + V_WIN_HK_US;
+            V.winGuard = true; V.seqTrigger = HK; V.guardUntil = now + V_CHORD_US;
+            rising &= ~HK;                        // not the "first attack" that ends the lock
+        }
+        if (!locked) V.afterBurn = false;
         // first attack in the air goes to the game and ends the lock (the next one can trigger)
         if (locked && !V.playing && V.win == W_NONE && (rising & ATTACK_MASK)) V.jumpLockUntil = 0;
 
