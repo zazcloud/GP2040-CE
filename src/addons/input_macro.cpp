@@ -808,6 +808,14 @@ namespace {
                         V.chordPending = false;
                         if (V.win == W_LOOP && loopSchedule(m, f, now)) {
                             // waits for its time below (hold keeps going)
+                        } else if (V.win == W_HK && (m & ATTACK_MASK) == LK) {
+                            // st.HK -> LK: thunder (MP+HP) + Level 2 window, starts 12f after the HK press
+                            closeWindow(now);
+                            seqThunder(MP | HP);
+                            V.lv2Pending = true;
+                            uint64_t at = V.hkStart + 12 * FRAME_US;
+                            if (at > now) V.delayedAt = at;
+                            else { startSeq(now, 0, 0); V.seqTrigger = 0; if (runSeq(gp, now, rel)) return true; }
                         } else if (V.win == W_HK && (m & ATTACK_MASK) == MK) {
                             // st.HK -> MK: OD burning kick, kicks land 32f after the HK press
                             closeWindow(now);
