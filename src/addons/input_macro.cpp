@@ -131,6 +131,7 @@ namespace {
     constexpr uint32_t TOGGLE_PIN_MASK = 1u << 20;
     bool macrosOn = true;
     bool prevTogglePin = false;
+    bool airSwallow = false;   // macro button pressed in the air: ignore it until released
 
     bool isGearMacro(const Macro& macro) {
         return macro.macroLabel[0] == 'G' && macro.macroLabel[1] == ' ';
@@ -446,7 +447,8 @@ namespace {
         vPush(B_, 0, randomRange(F10(20), F10(50)));
         uint32_t s4 = randomRange(F10(15), F10(25));
         vPush(B_, HP, s4);
-        vPush(B_, HP | LK, randomRange(F10(80), F10(120)));   // 8-12f
+        vPush(B_, HP | LK, randomRange(F10(120), F10(140)));  // 12-14f
+        vPush(B_, LK, randomRange(F10(10), F10(30)));         // punch released, kick held 1-3f
     }
     void seqSeismoNormal(uint32_t punches) {    // plain seismo: → ↘ → + punch
         vClear();
@@ -1035,7 +1037,13 @@ void InputMacro::preprocess()
     }
 
     checkMacroPress();
-    if (viperMode && viperLocked(now) && !isMacroRunning) pressedMacro = -1; // no macros in the air
+    // no macros in the air: a macro button pressed during the jump lock is thrown away
+    // and stays dead until you let go of it (it never fires on landing)
+    if (viperMode && !isMacroRunning) {
+        if (pressedMacro < 0) airSwallow = false;
+        else if (viperLocked(now)) airSwallow = true;
+        if (airSwallow) { pressedMacro = -1; prevMacroInputPressed = true; }
+    }
 
     // CUSTOM: gear selection (attack held + G macro held for 2 seconds)
     uint32_t attackHeld = gamepad->state.buttons & ATTACK_MASK;
