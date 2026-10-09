@@ -473,10 +473,10 @@ namespace {
         vPush(DF, 0, randomRange(F10(12), F10(20)));
         vPush(F_, punches, vBtn(), FL_OPEN_LOOP);
     }
-    // after MK: ↓ ↘ → ↗ → (1.2-2f each), then the button on N
+    // after MK: ↓ ↘ → ↗ (1.2-2f each), then the button on N
     void mkMotion() {
         vClear();
-        for (uint8_t d : {D_, DF, F_, UF, F_}) vPush(d, 0, randomRange(F10(12), F10(20)));
+        for (uint8_t d : {D_, DF, F_, UF}) vPush(d, 0, randomRange(F10(12), F10(20)));
     }
     void seqMKSeismo(uint32_t punches) { mkMotion(); vPush(N_, punches, vBtn(), FL_OPEN_LOOP | FL_BACK); }
     void seqMKFeint() {
