@@ -70,9 +70,10 @@ namespace {
     constexpr uint32_t V_ARROW_MIN     = F10(12);
     constexpr uint32_t V_ARROW_MAX     = F10(35);
     constexpr uint64_t V_JUMP_LOCK_US  = 43ULL * FRAME_US;
-    constexpr uint64_t V_WIN_MK_US     = 10ULL * FRAME_US;  // MK held (N or ↓) for 10f = MK window
+    constexpr uint32_t V_WIN_MK_MIN    = F10(200);          // MK held (N or ↓) 20-24f = MK window
+    constexpr uint32_t V_WIN_MK_MAX    = F10(240);
     constexpr uint64_t V_WIN_HK_US     = 14ULL * FRAME_US;
-    constexpr uint64_t V_WIN_LOOP_US   = 24ULL * FRAME_US;  // after a seismo: hold → + punch 24f
+    constexpr uint64_t V_WIN_LOOP_US   = 34ULL * FRAME_US;  // after a seismo: hold → + punch 34f
     constexpr uint64_t V_NO_CANCEL_US  = 10ULL * FRAME_US;  // loop ran out: 10f with no cancels
     constexpr uint64_t V_CHP_PUNCH_US  = 10ULL * FRAME_US;  // punch within 10f of cr.HP -> plain seismo
     constexpr uint64_t V_WIN_LV2_US    = 20ULL * FRAME_US;
@@ -279,6 +280,7 @@ namespace {
     constexpr uint8_t FL_OPEN_LOOP = 2;   // seismo loop window starts at this step
     constexpr uint8_t FL_JUMP      = 4;   // character leaves the ground here (lock after this step)
     constexpr uint8_t FL_LOCK      = 8;   // jump lock starts at the start of this step
+    constexpr uint8_t FL_BACK      = 16;  // loop opened here can be released with ← (seismo after MK)
 
     struct VStep { uint8_t dir; uint32_t btn; uint32_t dur; uint32_t heCut; uint8_t flags; };
 
@@ -321,6 +323,7 @@ namespace {
         uint8_t  mkDir = 0;           // N or ↓ held with MK
         uint32_t prevSuper = 0;
         bool superCancel = false;     // a macro super cancelled the loop this poll
+        bool loopBack = false;        // ← releases this loop hold
 
         bool prevSwitch = false, prevBurn = false;
 
@@ -469,7 +472,7 @@ namespace {
         vClear();
         for (uint8_t d : {D_, DF, F_, DF, F_, UF, F_}) vPush(d, 0, randomRange(F10(12), F10(30)));
     }
-    void seqMKSeismo(uint32_t punches) { mkMotion(); vPush(N_, punches, vBtn(), FL_OPEN_LOOP); }
+    void seqMKSeismo(uint32_t punches) { mkMotion(); vPush(N_, punches, vBtn(), FL_OPEN_LOOP | FL_BACK); }
     void seqMKFeint() {
         mkMotion();
         vPush(N_, HP | LK, randomRange(F10(40), F10(70)));
@@ -514,9 +517,9 @@ namespace {
         (void)now;
         V.win = W_NONE; V.chordPending = false; V.winGuard = false;
     }
-    void openLoop(uint64_t start, uint32_t punches, uint64_t holdFrom) {
+    void openLoop(uint64_t start, uint32_t punches, uint64_t holdFrom, bool backRelease = false) {
         V.win = W_LOOP; V.winDeadline = start + V_WIN_LOOP_US; V.winGuard = false;
-        V.loopPunch = punches; V.holdFrom = holdFrom;
+        V.loopPunch = punches; V.holdFrom = holdFrom; V.loopBack = backRelease;
     }
 
     // Decide what a window press means. Returns true if a sequence was started.
@@ -584,7 +587,7 @@ namespace {
             VStep& nx = V.seq[V.seqPos];
             if (nx.flags & FL_JUMP) setLock(V.stepStart + nx.dur + V_JUMP_LOCK_US);   // lock starts after ↑
             if (nx.flags & FL_LOCK) setLock(V.stepStart + V_JUMP_LOCK_US);           // lock starts at the kick
-            if (nx.flags & FL_OPEN_LOOP) openLoop(V.stepStart, nx.btn, V.stepStart);
+            if (nx.flags & FL_OPEN_LOOP) openLoop(V.stepStart, nx.btn, V.stepStart, (nx.flags & FL_BACK) != 0);
         }
         if (!V.playing) return false;
         VStep& st = V.seq[V.seqPos];
@@ -676,6 +679,9 @@ namespace {
         if (locked && !V.playing && V.win == W_NONE && (rising & ATTACK_MASK)) V.jumpLockUntil = 0;
 
         // ---- window handling
+        if (V.win == W_LOOP && !V.playing && V.loopBack && (rel & RB)) {
+            closeWindow(now);                     // seismo after MK: ← gives you the stick back
+        }
         if (V.win == W_LOOP && !V.playing && superRising) {
             closeWindow(now);                     // macro super cancels the loop hold
             V.superCancel = true;
@@ -745,7 +751,7 @@ namespace {
                     if (runSeq(gp, now, rel)) return true;
                 }
             } else if ((r & ATTACK_MASK) == MK && !(phys & ATTACK_MASK & ~MK)) {
-                V.win = W_MK; V.winDeadline = now + V_WIN_MK_US;
+                V.win = W_MK; V.winDeadline = now + randomRange(V_WIN_MK_MIN, V_WIN_MK_MAX);
                 V.winGuard = true; V.seqTrigger = MK; V.guardUntil = now + V_CHORD_US;
                 V.mkDir = (rel & RD) ? D_ : N_; V.holdFrom = now;
             } else if ((r & ATTACK_MASK) == HK && !(phys & ATTACK_MASK & ~HK) && (rel == N_ || rel == B_)) {
