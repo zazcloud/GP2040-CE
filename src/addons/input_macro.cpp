@@ -73,11 +73,12 @@ namespace {
     constexpr uint32_t V_WIN_MK_MIN    = F10(200);          // MK held (N or ↓) 20-24f = MK window
     constexpr uint32_t V_WIN_MK_MAX    = F10(240);
     constexpr uint64_t V_WIN_HK_US     = 14ULL * FRAME_US;
-    constexpr uint64_t V_WIN_LOOP_US   = 54ULL * FRAME_US;  // after a seismo: hold → + punch 54f
+    constexpr uint64_t V_WIN_LOOP_US   = 44ULL * FRAME_US;  // after a seismo: hold ← + punch 44f
     constexpr uint64_t V_NO_CANCEL_US  = 10ULL * FRAME_US;  // loop ran out: 10f with no cancels
     constexpr uint64_t V_CHP_PUNCH_US  = 14ULL * FRAME_US;  // punch within 14f of cr.HP -> plain seismo
     constexpr uint64_t V_WIN_LV2_US    = 20ULL * FRAME_US;
-    constexpr uint64_t V_CHORD_US      = 2ULL * FRAME_US;  // time to catch 2 buttons together
+    constexpr uint64_t V_CHORD_US      = 2ULL * FRAME_US;  // parry / DI guard after a trigger
+    constexpr uint64_t V_CHORD_WIN_US  = 3ULL * FRAME_US;  // window presses: 3f to catch 2 buttons (OD)
     constexpr uint64_t V_SEISMO_BTN_US = 4ULL * FRAME_US;  // punch within 4f of last arrow
     constexpr uint64_t V_MOTION_US     = 20ULL * FRAME_US; // whole DP motion must be this recent
     constexpr uint64_t V_SPECIAL_US    = 10ULL * FRAME_US; // down input this recent = special move
@@ -325,6 +326,9 @@ namespace {
         bool superCancel = false;     // a macro super cancelled the loop this poll
         bool loopBack = false;        // ← releases this loop hold (↙ always does)
         bool prevQcb = false;
+        bool rawPending = false;      // your own seismo: punch held back up to 3f to catch OD
+        uint32_t rawMask = 0;
+        uint64_t rawStart = 0;
 
         bool prevSwitch = false, prevBurn = false;
 
@@ -421,11 +425,11 @@ namespace {
     }
 
     void seqJump()                  { vClear(); addArrows({D_, DF, F_, UF}); vPush(U_, 0, vArrow(), FL_JUMP); }
-    void seqSeismo(uint32_t punches, bool walk) {   // jump-cancel seismo
+    void seqSeismo(uint32_t punches, bool walk) {   // jump-cancel seismo: ↓ ↘ → ↗ ↑, then N + punch
         vClear();
         if (walk) vPush(F_, 0, randomRange(F10(60), F10(110)));
-        addArrows({D_, DF, F_, UF});
-        vPush(U_, punches, vBtn(), FL_OPEN_LOOP);
+        for (uint8_t d : {D_, DF, F_, UF, U_}) vPush(d, 0, randomRange(F10(12), F10(25)));
+        vPush(N_, punches, vBtn(), FL_OPEN_LOOP);
     }
     void seqFeint(bool walk) {                  // jump-cancel seismo feint
         vClear();
@@ -460,8 +464,8 @@ namespace {
     void seqCrouchHP() {                        // cr.HP -> thunder dash feint
         vClear();
         vPush(D_, HP, randomRange(F10(40), F10(70)), FL_ABORT_FWD);
-        vPush(DB, 0, randomRange(F10(30), F10(60)));
-        vPush(B_, 0, randomRange(F10(30), F10(60)));
+        vPush(DB, 0, randomRange(F10(12), F10(20)));
+        vPush(B_, 0, randomRange(F10(50), F10(70)));
         uint32_t s4 = randomRange(F10(15), F10(25));
         vPush(B_, HP, s4);
         vPush(B_, HP | LK, randomRange(F10(120), F10(140)));  // 12-14f
@@ -641,7 +645,7 @@ namespace {
         if (V.playing && V.isCrouchHP && (rising & PUNCH_MASK) && now - V.chpStart < V_CHP_PUNCH_US) {
             // punch early in cr.HP: stop it and do a plain seismo (two punches = OD)
             V.playing = false;
-            V.win = W_CHP; V.winDeadline = now + V_CHORD_US; V.winGuard = false;
+            V.win = W_CHP; V.winDeadline = now + V_CHORD_WIN_US; V.winGuard = false;
             V.chordPending = true; V.chordMask = 0; V.chordFirst = lowestBit(rising & PUNCH_MASK); V.chordStart = now;
         }
         if (V.playing && V.isCrouchHP && (rising & XBTN)) {
@@ -692,8 +696,18 @@ namespace {
         if (locked && !V.playing && V.win == W_NONE && (rising & ATTACK_MASK)) V.jumpLockUntil = 0;
 
         // ---- window handling
-        if (V.win == W_LOOP && !V.playing && (V.loopBack ? (rel & RB) != 0 : rel == DB)) {
-            closeWindow(now);                     // ↙ (or any back after an MK seismo) gives you the stick back
+        // ---- your own seismo: punch held back up to 3f, then sent (two punches = OD), then the loop hold
+        if (V.rawPending) {
+            uint32_t p = rising & PUNCH_MASK;
+            V.rawMask |= p; V.suppress |= p;
+            if (popcount32(V.rawMask) >= 2 || now - V.rawStart >= V_CHORD_WIN_US) {
+                V.rawPending = false;
+                openLoop(now, V.rawMask, now + 2 * FRAME_US);   // 2f on your stick, then ← + punch
+                gp->state.buttons = (phys & ~ATTACK_MASK) | V.rawMask;   // your stick + the punch(es)
+                return true;
+            }
+            gp->state.buttons &= ~V.suppress;
+            return true;
         }
         if (V.win == W_HK && !V.chordPending && qcbRising) {
             closeWindow(now);                     // st.HK + Macro 1 = jump cancel thunder dash
@@ -717,7 +731,7 @@ namespace {
                 if (V.chordPending) {
                     V.chordMask |= r;
                     V.suppress |= r;
-                    bool ready = popcount32(V.chordMask) >= 2 || now - V.chordStart >= V_CHORD_US
+                    bool ready = popcount32(V.chordMask) >= 2 || now - V.chordStart >= V_CHORD_WIN_US
                                  || (V.win == W_LV2);
                     if (ready) {
                         uint32_t m = V.chordMask, f = V.chordFirst;
@@ -733,7 +747,6 @@ namespace {
                     if (resolveWindow(0, 0, true, now) && runSeq(gp, now, rel)) return true;
                 }
                 if (V.win != W_NONE && !V.chordPending && now >= V.winDeadline) {
-                    if (V.win == W_LOOP) V.noCancelUntil = now + V_NO_CANCEL_US;   // ran out: 10f no cancels
                     closeWindow(now);
                 }
             }
@@ -750,8 +763,9 @@ namespace {
             } else if (!canCancel) {
                 // loop just ran out: everything goes to the game as a normal hit
             } else if ((r & PUNCH_MASK) && detectSeismoMotion(now)) {
-                // you did a seismo yourself: let it through, then hold → + that punch (loop)
-                openLoop(now, r & PUNCH_MASK, now + FRAME_US);
+                // you did a seismo yourself: hold the punch back up to 3f (catch OD), then the loop hold
+                V.rawPending = true; V.rawMask = r & PUNCH_MASK; V.rawStart = now;
+                V.suppress |= V.rawMask;
             } else if ((r & ATTACK_MASK) == HP && !(phys & ATTACK_MASK & ~HP)) {
                 if (rel & RD) {
                     seqCrouchHP();
@@ -778,10 +792,14 @@ namespace {
             }
         }
 
-        // ---- hold output: MK held on N/↓ (MK window), → + punch (seismo loop)
+        // ---- hold output: MK held on N/↓ (MK window), ← + punch (seismo loop)
+        if (!V.playing && V.win == W_LOOP && now < V.holdFrom) {
+            gp->state.buttons = (phys & ~(ATTACK_MASK | XBTN)) | V.loopPunch;   // your stick + the punch
+            return true;
+        }
         if (!V.playing && (V.win == W_MK || V.win == W_LOOP) && now >= V.holdFrom) {
             bool loop = (V.win == W_LOOP);
-            gp->state.dpad = toAbs(loop ? F_ : V.mkDir);
+            gp->state.dpad = toAbs(loop ? B_ : V.mkDir);
             gp->state.buttons = (phys & ~(ATTACK_MASK | XBTN)) | (loop ? V.loopPunch : MK);
             return true;
         }
