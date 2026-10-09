@@ -323,7 +323,8 @@ namespace {
         uint8_t  mkDir = 0;           // N or ↓ held with MK
         uint32_t prevSuper = 0;
         bool superCancel = false;     // a macro super cancelled the loop this poll
-        bool loopBack = false;        // ← releases this loop hold
+        bool loopBack = false;        // ← releases this loop hold (↙ always does)
+        bool prevQcb = false;
 
         bool prevSwitch = false, prevBurn = false;
 
@@ -437,6 +438,11 @@ namespace {
         vClear(); addArrows({D_, DF, F_, UF}); vPush(U_, 0, vArrow(), FL_JUMP);
         vPush(N_, kicks, vBtn());
     }
+    void seqHKThunder() {                       // st.HK + Macro 1: jump cancel thunder dash, no LK
+        vClear(); addArrows({D_, DB, B_});
+        vPush(UB, HP, randomRange(F10(40), F10(70)));
+        vPush(coin() ? B_ : UB, HP, randomRange(F10(70), F10(120)));
+    }
     void seqThunder(uint32_t punches) {        // jump cancel thunder dash
         vClear(); addArrows({D_, DB, B_, UB});
         vPush(UB, punches, randomRange(F10(15), F10(25)));
@@ -454,8 +460,8 @@ namespace {
     void seqCrouchHP() {                        // cr.HP -> thunder dash feint
         vClear();
         vPush(D_, HP, randomRange(F10(40), F10(70)), FL_ABORT_FWD);
-        vPush(DB, 0, randomRange(F10(20), F10(50)));
-        vPush(B_, 0, randomRange(F10(20), F10(50)));
+        vPush(DB, 0, randomRange(F10(30), F10(60)));
+        vPush(B_, 0, randomRange(F10(30), F10(60)));
         uint32_t s4 = randomRange(F10(15), F10(25));
         vPush(B_, HP, s4);
         vPush(B_, HP | LK, randomRange(F10(120), F10(140)));  // 12-14f
@@ -467,10 +473,10 @@ namespace {
         vPush(DF, 0, randomRange(F10(12), F10(20)));
         vPush(F_, punches, vBtn(), FL_OPEN_LOOP);
     }
-    // after MK: ↓ ↘ → ↗ → (1.2-3f each), then the button on N
+    // after MK: ↓ ↘ → ↗ → (1.2-2f each), then the button on N
     void mkMotion() {
         vClear();
-        for (uint8_t d : {D_, DF, F_, UF, F_}) vPush(d, 0, randomRange(F10(12), F10(30)));
+        for (uint8_t d : {D_, DF, F_, UF, F_}) vPush(d, 0, randomRange(F10(12), F10(20)));
     }
     void seqMKSeismo(uint32_t punches) { mkMotion(); vPush(N_, punches, vBtn(), FL_OPEN_LOOP | FL_BACK); }
     void seqMKFeint() {
@@ -598,8 +604,11 @@ namespace {
     }
 
     // Returns true when the Viper engine owns the output this poll.
-    bool viperProcess(Gamepad* gp, uint64_t now, uint32_t switchPin, uint32_t burnPin, uint32_t superPins, bool otherMacroBusy) {
+    bool viperProcess(Gamepad* gp, uint64_t now, uint32_t switchPin, uint32_t burnPin, uint32_t superPins, uint32_t qcbPin, bool otherMacroBusy) {
         Mask_t pins = gp->debouncedGpio;
+        bool qcbNow = qcbPin && (pins & qcbPin);
+        bool qcbRising = qcbNow && !V.prevQcb;
+        V.prevQcb = qcbNow;
         uint32_t superNow = (uint32_t)(pins & superPins);
         uint32_t superRising = superNow & ~V.prevSuper;
         V.prevSuper = superNow;
@@ -679,8 +688,13 @@ namespace {
         if (locked && !V.playing && V.win == W_NONE && (rising & ATTACK_MASK)) V.jumpLockUntil = 0;
 
         // ---- window handling
-        if (V.win == W_LOOP && !V.playing && V.loopBack && (rel & RB)) {
-            closeWindow(now);                     // seismo after MK: ← gives you the stick back
+        if (V.win == W_LOOP && !V.playing && (V.loopBack ? (rel & RB) != 0 : rel == DB)) {
+            closeWindow(now);                     // ↙ (or any back after an MK seismo) gives you the stick back
+        }
+        if (V.win == W_HK && !V.chordPending && qcbRising) {
+            closeWindow(now);                     // st.HK + Macro 1 = jump cancel thunder dash
+            seqHKThunder(); startSeq(now, 0, 0);
+            if (runSeq(gp, now, rel)) return true;
         }
         if (V.win == W_LOOP && !V.playing && superRising) {
             closeWindow(now);                     // macro super cancels the loop hold
@@ -1096,7 +1110,7 @@ void InputMacro::preprocess()
     // CUSTOM: Viper engine (runs first, owns the output while a Viper move plays)
     if (viperMode) {
         if (viperProcess(gamepad, now, macroPinMasks[4], macroPinMasks[5],
-                         (uint32_t)(macroPinMasks[2] | macroPinMasks[3]), isMacroRunning)) {
+                         (uint32_t)(macroPinMasks[2] | macroPinMasks[3]), (uint32_t)macroPinMasks[0], isMacroRunning)) {
             prevMacroInputPressed = true;   // don't start a regular macro under it
             return;
         }
