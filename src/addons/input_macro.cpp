@@ -72,9 +72,9 @@ namespace {
     constexpr uint64_t V_JUMP_LOCK_US  = 43ULL * FRAME_US;
     constexpr uint64_t V_WIN_MK_US     = 13ULL * FRAME_US;
     constexpr uint64_t V_WIN_HK_US     = 14ULL * FRAME_US;
-    constexpr uint64_t V_WIN_LOOP_US   = 24ULL * FRAME_US;
-    constexpr uint64_t V_WIN_CHP_US    = 7ULL * FRAME_US;   // after cr.HP feint: punch = seismo
-    constexpr uint64_t V_CHP_PUNCH_US  = 12ULL * FRAME_US;  // punch this early stops cr.HP -> seismo
+    constexpr uint64_t V_WIN_LOOP_US   = 29ULL * FRAME_US;
+    constexpr uint64_t V_HP_BLOCK_US   = 30ULL * FRAME_US;  // after the loop window: no HP cancels
+    constexpr uint64_t V_CHP_PUNCH_US  = 9ULL * FRAME_US;   // punch within 9f of cr.HP -> plain seismo
     constexpr uint64_t V_WIN_LV2_US    = 20ULL * FRAME_US;
     constexpr uint64_t V_CHORD_US      = 2ULL * FRAME_US;  // time to catch 2 buttons together
     constexpr uint64_t V_SEISMO_BTN_US = 4ULL * FRAME_US;  // punch within 4f of last arrow
@@ -294,7 +294,6 @@ namespace {
         uint64_t guardUntil = 0;      // other attack rising before this = cancel trigger
         bool lv2Pending = false;      // open Level 2 window when sequence ends
         bool isCrouchHP = false;      // X can cancel this one
-        bool chpPending = false;      // open the 7f seismo window when cr.HP ends
         uint64_t chpStart = 0;
 
         VWin win = W_NONE;
@@ -313,6 +312,7 @@ namespace {
         uint32_t prevButtons = 0;
         uint8_t  prevRel = 0;
         uint64_t jumpLockUntil = 0;
+        uint64_t hpBlockUntil = 0;
 
         bool prevSwitch = false, prevBurn = false;
 
@@ -408,15 +408,15 @@ namespace {
     }
 
     void seqJump()                  { vClear(); addArrows({D_, DF, F_, UF}); vPush(U_, 0, vArrow(), FL_JUMP); }
-    void seqSeismo(uint32_t punches) {          // jump-cancel seismo
+    void seqSeismo(uint32_t punches, bool walk) {   // jump-cancel seismo
         vClear();
-        vPush(F_, 0, randomRange(F10(60), F10(110)));
+        if (walk) vPush(F_, 0, randomRange(F10(60), F10(110)));
         addArrows({D_, DF, F_, UF});
         vPush(U_, punches, vBtn(), FL_OPEN_LOOP);
     }
-    void seqFeint() {                           // jump-cancel seismo feint
+    void seqFeint(bool walk) {                  // jump-cancel seismo feint
         vClear();
-        vPush(F_, 0, randomRange(F10(60), F10(110)));
+        if (walk) vPush(F_, 0, randomRange(F10(60), F10(110)));
         addArrows({D_, DF, F_, UF});
         vPush(U_, HP | LK, randomRange(F10(40), F10(70)));
         vPush(U_, coin() ? LK : HP, randomRange(F10(50), F10(90)));
@@ -436,8 +436,8 @@ namespace {
         addArrows({D_, DB, B_});
         vPush(UB, HP, randomRange(F10(40), F10(70)));
         uint8_t d6 = coin() ? B_ : UB;
-        vPush(d6, HP | LK, randomRange(F10(100), F10(140)));
-        vPush(coin() ? d6 : N_, LK, randomRange(F10(80), F10(160)));  // kick only, arrow 50/50
+        vPush(d6, HP | LK, randomRange(F10(120), F10(160)));
+        vPush(coin() ? d6 : N_, LK, randomRange(F10(10), F10(30)));  // kick only, arrow 50/50
     }
     void seqCrouchHP() {                        // cr.HP -> thunder dash feint
         vClear();
@@ -446,8 +446,7 @@ namespace {
         vPush(B_, 0, randomRange(F10(20), F10(50)));
         uint32_t s4 = randomRange(F10(15), F10(25));
         vPush(B_, HP, s4);
-        vPush(B_, HP | LK, s4 * 4);                   // 4x step 4 (6-10f)
-        vPush(B_, LK, randomRange(F10(20), F10(60))); // punch released, kick still held
+        vPush(B_, HP | LK, randomRange(F10(80), F10(120)));   // 8-12f
     }
     void seqSeismoNormal(uint32_t punches) {    // plain seismo: → ↘ → + punch
         vClear();
@@ -486,23 +485,26 @@ namespace {
         V.guardUntil = now + guardUs;
         V.bufMask = 0; V.bufFirst = 0; V.bufJump = false;
         V.chordPending = false;
-        if (V.seqLen > 0 && (V.seq[0].flags & FL_JUMP)) V.jumpLockUntil = now + V_JUMP_LOCK_US;
+        if (V.seqLen > 0 && (V.seq[0].flags & FL_JUMP)) V.jumpLockUntil = now + V.seq[0].dur + V_JUMP_LOCK_US;
     }
 
-    void closeWindow() { V.win = W_NONE; V.chordPending = false; V.winGuard = false; }
+    void closeWindow(uint64_t now) {
+        if (V.win == W_LOOP) V.hpBlockUntil = now + V_HP_BLOCK_US;   // 30f: HP is a plain hit
+        V.win = W_NONE; V.chordPending = false; V.winGuard = false;
+    }
 
     // Decide what a window press means. Returns true if a sequence was started.
     bool resolveWindow(uint32_t mask, uint32_t first, bool jump, uint64_t now) {
         VWin w = V.win;
-        closeWindow();
+        closeWindow(now);
         V.lv2Pending = false;
-        if (jump && (w == W_MK || w == W_HK || w == W_LOOP)) { seqJump(); startSeq(now, 0, 0); return true; }
+        if (jump && w == W_HK) { seqJump(); startSeq(now, 0, 0); return true; }
 
         if (w == W_LV2) {
             if (mask & LK) { seqLevel2(); startSeq(now, 0, 0); return true; }
             return false;
         }
-        if (w == W_CHP) {                     // after / during cr.HP: punch = plain seismo
+        if (w == W_CHP) {                     // within 9f of cr.HP: punch = plain seismo
             uint32_t p = mask & PUNCH_MASK;
             if (!p) return false;
             seqSeismoNormal(popcount32(p) >= 2 ? p : lowestBit(p));
@@ -510,12 +512,13 @@ namespace {
         }
 
         uint32_t punches = mask & PUNCH_MASK, kicks = mask & KICK_MASK;
-        if ((mask & LP) && (mask & LK)) { seqFeint(); startSeq(now, 0, 0); return true; }
-        if (popcount32(punches) >= 2) { seqSeismo(punches); startSeq(now, 0, 0); return true; }
+        bool walk = (w != W_MK);              // after MK: no walk-forward step
+        if ((mask & LP) && (mask & LK)) { seqFeint(walk); startSeq(now, 0, 0); return true; }
+        if (popcount32(punches) >= 2) { seqSeismo(punches, walk); startSeq(now, 0, 0); return true; }
         if (punches && kicks) {               // mixed: take the button pressed first
             if (first & PUNCH_MASK) kicks = 0; else punches = 0;
         }
-        if (punches) { seqSeismo(lowestBit(punches)); startSeq(now, 0, 0); return true; }
+        if (punches) { seqSeismo(lowestBit(punches), walk); startSeq(now, 0, 0); return true; }
         if (kicks) {
             if (w == W_HK) {
                 if (popcount32(kicks) != 1) return false;
@@ -536,7 +539,6 @@ namespace {
             VStep& st = V.seq[V.seqPos];
             if ((st.flags & FL_ABORT_FWD) && physRel == F_) {   // cr.HP: walking forward cancels
                 V.playing = false;
-                V.chpPending = false;
                 V.suppress &= ~V.seqTrigger;
                 return false;
             }
@@ -545,7 +547,7 @@ namespace {
             V.seqPos++;
             if (V.seqPos >= V.seqLen) { V.playing = false; return false; }
             VStep& nx = V.seq[V.seqPos];
-            if (nx.flags & FL_JUMP) V.jumpLockUntil = V.stepStart + V_JUMP_LOCK_US;
+            if (nx.flags & FL_JUMP) V.jumpLockUntil = V.stepStart + nx.dur + V_JUMP_LOCK_US;   // lock starts after ↑
             if (nx.flags & FL_OPEN_LOOP) { V.win = W_LOOP; V.winDeadline = V.stepStart + V_WIN_LOOP_US; V.winGuard = false; }
         }
         if (!V.playing) return false;
@@ -584,14 +586,12 @@ namespace {
         if (V.playing && V.isCrouchHP && (rising & PUNCH_MASK) && now - V.chpStart < V_CHP_PUNCH_US) {
             // punch early in cr.HP: stop it and do a plain seismo (two punches = OD)
             V.playing = false;
-            V.chpPending = false;
             V.win = W_CHP; V.winDeadline = now + V_CHORD_US; V.winGuard = false;
             V.chordPending = true; V.chordMask = 0; V.chordFirst = lowestBit(rising & PUNCH_MASK); V.chordStart = now;
         }
         if (V.playing && V.isCrouchHP && (rising & XBTN)) {
             // X cancels cr.HP: Level 1 in burnout, otherwise X goes to the game
             V.playing = false;
-            V.chpPending = false;
             V.suppress &= ~V.seqTrigger;
             if (V.burnout) {
                 V.suppress |= XBTN;
@@ -606,18 +606,17 @@ namespace {
                 V.suppress &= ~V.seqTrigger;
             } else {
                 // remember presses for the next window (seismo loop / Level 2)
-                bool armed = V.lv2Pending || V.chpPending || V.win != W_NONE;
-                uint32_t r = rising & (V.lv2Pending ? LK : V.chpPending ? PUNCH_MASK : ATTACK_MASK);
+                bool armed = V.lv2Pending || V.win != W_NONE;
+                uint32_t r = rising & (V.lv2Pending ? LK : ATTACK_MASK);
                 if (armed && r) {
                     if (!V.bufMask) { V.bufFirst = lowestBit(r); V.bufStart = now; }
                     V.bufMask |= r;
                 }
                 V.suppress |= rising & ATTACK_MASK;   // never leak a press into the game mid-move
-                if (armed && ufRising && !V.lv2Pending && !V.chpPending) V.bufJump = true;
+                if (ufRising && !V.lv2Pending && V.win == W_HK) V.bufJump = true;
                 if (runSeq(gp, now, rel)) return true;
                 // sequence just finished
                 if (V.lv2Pending) { V.lv2Pending = false; V.win = W_LV2; V.winDeadline = now + V_WIN_LV2_US; }
-                if (V.chpPending) { V.chpPending = false; V.win = W_CHP; V.winDeadline = now + V_WIN_CHP_US; V.winGuard = false; }
                 if (V.win != W_NONE && (V.bufMask || V.bufJump)) {
                     if (V.bufJump) {
                         V.bufMask = 0; V.bufJump = false;
@@ -637,7 +636,7 @@ namespace {
         // ---- window handling
         if (V.win != W_NONE) {
             if (V.winGuard && now < V.guardUntil && (rising & ATTACK_MASK & ~V.seqTrigger)) {
-                closeWindow();                    // MP+MK parry, HP+HK impact, etc.
+                closeWindow(now);                    // MP+MK parry, HP+HK impact, etc.
             } else {
                 V.winGuard = V.winGuard && now < V.guardUntil;
                 uint32_t r = rising & ATTACK_MASK;
@@ -660,10 +659,10 @@ namespace {
                             V.suppress &= ~m;     // not a window input: let it through
                         }
                     }
-                } else if (ufRising && (V.win == W_MK || V.win == W_HK || V.win == W_LOOP)) {
+                } else if (ufRising && V.win == W_HK) {   // jump only after st.HK
                     if (resolveWindow(0, 0, true, now) && runSeq(gp, now, rel)) return true;
                 }
-                if (V.win != W_NONE && !V.chordPending && now >= V.winDeadline) closeWindow();
+                if (V.win != W_NONE && !V.chordPending && now >= V.winDeadline) closeWindow(now);
             }
         }
 
@@ -677,7 +676,7 @@ namespace {
             } else if ((r & PUNCH_MASK) && detectSeismoMotion(now)) {
                 // you did a seismo yourself: let it through and open the loop
                 V.win = W_LOOP; V.winDeadline = now + V_WIN_LOOP_US; V.winGuard = false;
-            } else if ((r & ATTACK_MASK) == HP && !(phys & ATTACK_MASK & ~HP)) {
+            } else if ((r & ATTACK_MASK) == HP && !(phys & ATTACK_MASK & ~HP) && now >= V.hpBlockUntil) {
                 if (rel & RD) {
                     seqCrouchHP();
                 } else if (!recentDown(now)) {
@@ -690,7 +689,6 @@ namespace {
                     V.suppress |= HP;
                     startSeq(now, HP, 0);               // nothing stops st.HP; cr.HP rules are above
                     V.isCrouchHP = crouch;
-                    V.chpPending = crouch;
                     V.chpStart = now;
                     if (runSeq(gp, now, rel)) return true;
                 }
