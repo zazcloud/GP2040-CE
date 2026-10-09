@@ -73,9 +73,9 @@ namespace {
     constexpr uint32_t V_WIN_MK_MIN    = F10(200);          // MK held (N or ↓) 20-24f = MK window
     constexpr uint32_t V_WIN_MK_MAX    = F10(240);
     constexpr uint64_t V_WIN_HK_US     = 14ULL * FRAME_US;
-    constexpr uint64_t V_WIN_LOOP_US   = 44ULL * FRAME_US;  // after a seismo: hold → + punch 44f
+    constexpr uint64_t V_WIN_LOOP_US   = 54ULL * FRAME_US;  // after a seismo: hold → + punch 54f
     constexpr uint64_t V_NO_CANCEL_US  = 10ULL * FRAME_US;  // loop ran out: 10f with no cancels
-    constexpr uint64_t V_CHP_PUNCH_US  = 10ULL * FRAME_US;  // punch within 10f of cr.HP -> plain seismo
+    constexpr uint64_t V_CHP_PUNCH_US  = 14ULL * FRAME_US;  // punch within 14f of cr.HP -> plain seismo
     constexpr uint64_t V_WIN_LV2_US    = 20ULL * FRAME_US;
     constexpr uint64_t V_CHORD_US      = 2ULL * FRAME_US;  // time to catch 2 buttons together
     constexpr uint64_t V_SEISMO_BTN_US = 4ULL * FRAME_US;  // punch within 4f of last arrow
@@ -539,7 +539,7 @@ namespace {
             if (mask & LK) { seqLevel2(); startSeq(now, 0, 0); return true; }
             return false;
         }
-        if (w == W_CHP) {                     // within 10f of cr.HP: punch = plain seismo
+        if (w == W_CHP) {                     // within 14f of cr.HP: punch = plain seismo
             uint32_t p = mask & PUNCH_MASK;
             if (!p) return false;
             seqSeismoNormal(popcount32(p) >= 2 ? p : lowestBit(p));
