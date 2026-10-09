@@ -428,6 +428,7 @@ namespace {
     void seqJump()                  { vClear(); addArrows({D_, DF, F_, UF}); vPush(U_, 0, vArrow(), FL_JUMP); }
     void seqSeismo(uint32_t punches, bool walk) {   // jump-cancel seismo: ↓ ↘ → ↗ ↑, then N + punch
         vClear();
+        vPush(N_, 0, randomRange(F10(30), F10(50)));   // neutral 3-5f before every seismo
         if (walk) vPush(F_, 0, randomRange(F10(60), F10(110)));
         for (uint8_t d : {D_, DF, F_, UF, U_}) vPush(d, 0, randomRange(F10(12), F10(25)));
         vPush(N_, punches, vBtn(), FL_OPEN_LOOP);
@@ -474,8 +475,9 @@ namespace {
         vPush(B_, HP | LK, randomRange(F10(120), F10(140)));  // 12-14f
         vPush(B_, LK, randomRange(F10(10), F10(30)));         // punch released, kick held 1-3f
     }
-    void seqSeismoNormal(uint32_t punches) {    // plain seismo: → ↘ → + punch (fast arrows 1.2-2f)
+    void seqSeismoNormal(uint32_t punches) {    // plain seismo: N, → ↘ → + punch (fast arrows 1.2-2f)
         vClear();
+        vPush(N_, 0, randomRange(F10(30), F10(50)));
         vPush(F_, 0, randomRange(F10(12), F10(20)));
         vPush(DF, 0, randomRange(F10(12), F10(20)));
         vPush(F_, punches, vBtn(), FL_OPEN_LOOP);
@@ -485,7 +487,13 @@ namespace {
         vClear();
         for (uint8_t d : {D_, DF, F_, UF}) vPush(d, 0, randomRange(F10(12), F10(20)));
     }
-    void seqMKSeismo(uint32_t punches) { mkMotion(); vPush(U_, punches, vBtn(), FL_OPEN_LOOP | FL_BACK); }
+    void seqMKSeismo(uint32_t punches) {        // N 3-5f, ↓ ↘ → ↗, ↑ 1.5-3f, then N + punch
+        vClear();
+        vPush(N_, 0, randomRange(F10(30), F10(50)));
+        for (uint8_t d : {D_, DF, F_, UF}) vPush(d, 0, randomRange(F10(12), F10(20)));
+        vPush(U_, 0, randomRange(F10(15), F10(30)));
+        vPush(N_, punches, vBtn(), FL_OPEN_LOOP | FL_BACK);
+    }
     void seqMKFeint() {
         mkMotion();
         vPush(U_, HP | LK, randomRange(F10(40), F10(70)));
