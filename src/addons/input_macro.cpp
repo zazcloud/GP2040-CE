@@ -73,7 +73,7 @@ namespace {
     constexpr uint32_t V_WIN_MK_MIN    = F10(200);          // MK held (N or ↓) 20-24f = MK window
     constexpr uint32_t V_WIN_MK_MAX    = F10(240);
     constexpr uint64_t V_WIN_HK_US     = 14ULL * FRAME_US;
-    constexpr uint64_t V_WIN_LOOP_US   = 44ULL * FRAME_US;  // after a seismo: hold ← + punch 44f
+    constexpr uint64_t V_WIN_LOOP_US   = 44ULL * FRAME_US;  // after a seismo: hold → + punch 44f
     constexpr uint64_t V_NO_CANCEL_US  = 10ULL * FRAME_US;  // loop ran out: 10f with no cancels
     constexpr uint64_t V_CHP_PUNCH_US  = 14ULL * FRAME_US;  // punch within 14f of cr.HP -> plain seismo
     constexpr uint64_t V_WIN_LV2_US    = 20ULL * FRAME_US;
@@ -735,6 +735,9 @@ namespace {
             seqHKThunder(); startSeq(now, 0, 0);
             if (runSeq(gp, now, rel)) return true;
         }
+        if (V.win == W_LOOP && !V.playing && (rel & RB)) {
+            closeWindow(now);                     // back (← ↙ ↖) releases the seismo hold, nothing comes out
+        }
         if (V.win == W_LOOP && !V.playing && superRising) {
             closeWindow(now);                     // macro super cancels the loop hold
             V.superCancel = true;
@@ -813,14 +816,14 @@ namespace {
             }
         }
 
-        // ---- hold output: MK held on N/↓ (MK window), ← + punch (seismo loop)
+        // ---- hold output: MK held on N/↓ (MK window), → + punch (seismo loop)
         if (!V.playing && V.win == W_LOOP && now < V.holdFrom) {
             gp->state.buttons = (phys & ~(ATTACK_MASK | XBTN)) | V.loopPunch;   // your stick + the punch
             return true;
         }
         if (!V.playing && (V.win == W_MK || V.win == W_LOOP) && now >= V.holdFrom) {
             bool loop = (V.win == W_LOOP);
-            gp->state.dpad = toAbs(loop ? B_ : V.mkDir);
+            gp->state.dpad = toAbs(loop ? F_ : V.mkDir);
             gp->state.buttons = (phys & ~(ATTACK_MASK | XBTN)) | (loop ? V.loopPunch : MK);
             return true;
         }
