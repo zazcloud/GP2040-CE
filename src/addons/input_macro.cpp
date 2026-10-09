@@ -73,7 +73,7 @@ namespace {
     constexpr uint32_t V_WIN_MK_MIN    = F10(200);          // MK held (N or ↓) 20-24f = MK window
     constexpr uint32_t V_WIN_MK_MAX    = F10(240);
     constexpr uint64_t V_WIN_HK_US     = 14ULL * FRAME_US;
-    constexpr uint64_t V_WIN_LOOP_US   = 44ULL * FRAME_US;  // after a seismo: hold → + punch 44f
+    constexpr uint64_t V_WIN_LOOP_US   = 35ULL * FRAME_US;  // after a seismo: hold → + punch, 35f max
     constexpr uint64_t V_NO_CANCEL_US  = 10ULL * FRAME_US;  // loop ran out: 10f with no cancels
     constexpr uint64_t V_CHP_PUNCH_US  = 14ULL * FRAME_US;  // punch within 14f of cr.HP -> plain seismo
     constexpr uint64_t V_WIN_LV2_US    = 20ULL * FRAME_US;
@@ -326,6 +326,10 @@ namespace {
         bool superCancel = false;     // a macro super cancelled the loop this poll
         bool loopBack = false;        // ← releases this loop hold (↙ always does)
         bool prevQcb = false;
+        uint64_t loopStart = 0;       // seismo punch press that opened this loop
+        uint32_t pendMask = 0;        // loop cancel waiting for its time
+        bool pendKick = false;
+        uint64_t pendAt = 0;
         bool nextAfterBurn = false, afterBurn = false;
         bool rawPending = false;      // your own seismo: punch held back up to 3f to catch OD
         uint32_t rawMask = 0;
@@ -542,10 +546,44 @@ namespace {
     void closeWindow(uint64_t now) {
         (void)now;
         V.win = W_NONE; V.chordPending = false; V.winGuard = false;
+        V.pendMask = 0;
     }
     void openLoop(uint64_t start, uint32_t punches, uint64_t holdFrom, bool backRelease = false) {
         V.win = W_LOOP; V.winDeadline = start + V_WIN_LOOP_US; V.winGuard = false;
         V.loopPunch = punches; V.holdFrom = holdFrom; V.loopBack = backRelease;
+        V.loopStart = start; V.pendMask = 0;
+    }
+    // loop: jump cancel seismo the way you do it: N, ↓ ↘ → ↗, ↗ + punch 1f, → + punch
+    void seqLoopJC(uint32_t punches) {
+        vClear();
+        vPush(N_, 0, randomRange(F10(15), F10(25)));
+        vPush(D_, 0, randomRange(F10(50), F10(70)));
+        vPush(DF, 0, randomRange(F10(20), F10(40)));
+        vPush(F_, 0, randomRange(F10(10), F10(20)));
+        vPush(UF, 0, randomRange(F10(40), F10(60)));
+        vPush(UF, punches, F10(10), FL_OPEN_LOOP);           // the new seismo starts here
+        vPush(F_, punches, randomRange(F10(80), F10(100)));
+    }
+    // loop press: punch -> JC seismo at 20-22f, kick -> burning kick at 32-35f (from the seismo press).
+    // Returns false for anything else (feint etc. are handled right away by resolveWindow).
+    bool loopSchedule(uint32_t mask, uint32_t first, uint64_t now) {
+        (void)now;
+        if ((mask & LP) && (mask & LK)) return false;
+        uint32_t punches = mask & PUNCH_MASK, kicks = mask & KICK_MASK;
+        if (punches && kicks) { if (first & PUNCH_MASK) kicks = 0; else punches = 0; }
+        if (punches) {
+            V.pendMask = popcount32(punches) >= 2 ? punches : lowestBit(punches);
+            V.pendKick = false;
+            V.pendAt = V.loopStart + randomRange(20 * FRAME_US, 22 * FRAME_US);
+            return true;
+        }
+        if (kicks) {
+            V.pendMask = popcount32(kicks) >= 2 ? (MK | HK) : kicks;
+            V.pendKick = true;
+            V.pendAt = V.loopStart + randomRange(32 * FRAME_US, 35 * FRAME_US);
+            return true;
+        }
+        return false;
     }
 
     // Decide what a window press means. Returns true if a sequence was started.
@@ -723,7 +761,7 @@ namespace {
             V.rawMask |= p; V.suppress |= p;
             if (popcount32(V.rawMask) >= 2 || now - V.rawStart >= V_CHORD_WIN_US) {
                 V.rawPending = false;
-                openLoop(now, V.rawMask, now + 2 * FRAME_US);   // 2f on your stick, then ← + punch
+                openLoop(V.rawStart, V.rawMask, now + 2 * FRAME_US);   // 2f on your stick, then → + punch
                 gp->state.buttons = (phys & ~ATTACK_MASK) | V.rawMask;   // your stick + the punch(es)
                 return true;
             }
@@ -749,6 +787,7 @@ namespace {
                 V.winGuard = V.winGuard && now < V.guardUntil;
                 uint32_t r = rising & ATTACK_MASK;
                 if (V.winGuard) r &= ~V.seqTrigger;
+                if (V.pendMask) r = 0;              // a loop cancel is already waiting
                 if (r && !V.chordPending) {
                     V.chordPending = true; V.chordMask = 0; V.chordFirst = lowestBit(r); V.chordStart = now;
                 }
@@ -760,7 +799,9 @@ namespace {
                     if (ready) {
                         uint32_t m = V.chordMask, f = V.chordFirst;
                         V.chordPending = false;
-                        if (resolveWindow(m, f, false, now)) {
+                        if (V.win == W_LOOP && loopSchedule(m, f, now)) {
+                            // waits for its time below (hold keeps going)
+                        } else if (resolveWindow(m, f, false, now)) {
                             V.seqTrigger = 0;
                             if (runSeq(gp, now, rel)) return true;
                         } else {
@@ -770,7 +811,14 @@ namespace {
                 } else if (ufRising && V.win == W_HK) {   // jump only after st.HK
                     if (resolveWindow(0, 0, true, now) && runSeq(gp, now, rel)) return true;
                 }
-                if (V.win != W_NONE && !V.chordPending && now >= V.winDeadline) {
+                if (V.win == W_LOOP && V.pendMask && !V.playing && now >= V.pendAt) {
+                    uint32_t pm = V.pendMask; bool kick = V.pendKick;
+                    closeWindow(now);
+                    if (kick) seqBurn(pm); else seqLoopJC(pm);
+                    startSeq(now, 0, 0); V.seqTrigger = 0;
+                    if (runSeq(gp, now, rel)) return true;
+                }
+                if (V.win != W_NONE && !V.chordPending && !V.pendMask && now >= V.winDeadline) {
                     closeWindow(now);
                 }
             }
