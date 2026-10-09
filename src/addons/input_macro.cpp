@@ -73,7 +73,7 @@ namespace {
     constexpr uint32_t V_WIN_MK_MIN    = F10(200);          // MK held (N or ↓) 20-24f = MK window
     constexpr uint32_t V_WIN_MK_MAX    = F10(240);
     constexpr uint64_t V_WIN_HK_US     = 14ULL * FRAME_US;
-    constexpr uint64_t V_WIN_LOOP_US   = 34ULL * FRAME_US;  // after a seismo: hold → + punch 34f
+    constexpr uint64_t V_WIN_LOOP_US   = 44ULL * FRAME_US;  // after a seismo: hold → + punch 44f
     constexpr uint64_t V_NO_CANCEL_US  = 10ULL * FRAME_US;  // loop ran out: 10f with no cancels
     constexpr uint64_t V_CHP_PUNCH_US  = 10ULL * FRAME_US;  // punch within 10f of cr.HP -> plain seismo
     constexpr uint64_t V_WIN_LV2_US    = 20ULL * FRAME_US;
@@ -467,10 +467,10 @@ namespace {
         vPush(DF, 0, randomRange(F10(12), F10(20)));
         vPush(F_, punches, vBtn(), FL_OPEN_LOOP);
     }
-    // after MK: ↓ ↘ → ↘ → ↗ → (1.2-3f each), then the button on N
+    // after MK: ↓ ↘ → ↗ → (1.2-3f each), then the button on N
     void mkMotion() {
         vClear();
-        for (uint8_t d : {D_, DF, F_, DF, F_, UF, F_}) vPush(d, 0, randomRange(F10(12), F10(30)));
+        for (uint8_t d : {D_, DF, F_, UF, F_}) vPush(d, 0, randomRange(F10(12), F10(30)));
     }
     void seqMKSeismo(uint32_t punches) { mkMotion(); vPush(N_, punches, vBtn(), FL_OPEN_LOOP | FL_BACK); }
     void seqMKFeint() {
