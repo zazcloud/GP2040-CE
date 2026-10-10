@@ -23,6 +23,10 @@ extern volatile bool g_viperBurnout;
 extern volatile bool g_sagatMode;
 extern volatile bool g_sagatBurnout;
 extern volatile uint32_t g_sagatGearMask;
+extern volatile int g_caseCalib;
+// case LEDs that sit under the gear buttons (M3 / M4); -1 until found with the LED finder
+static const int GEAR_LED_A = -1;
+static const int GEAR_LED_B = -1;
 
 #define FRAME_MAX 100
 #define AL_ROW	5
@@ -604,14 +608,12 @@ void NeoPicoLEDAddon::process() {
         float bx = as.GetBrightnessX() * 0.5f;
         LEDFormat fmt = neopico.GetFormat();
         uint32_t base  = (g_sagatBurnout ? RGB(255, 120, 0) : RGB(255, 235, 140)).value(fmt, bx);
-        uint32_t red   = RGB(255, 0, 0).value(fmt, bx);
         uint32_t white = RGB(255, 255, 255).value(fmt, bx);
         uint32_t sideMask = g_viperFacingRight ? GAMEPAD_MASK_DL : GAMEPAD_MASK_DR;
-        uint32_t gear = g_sagatGearMask;
         for (auto &row : matrix.pixels) {
             for (auto &pixel : row) {
                 if (pixel.index < 0 || pixel.mask == 0) continue;
-                uint32_t c = (pixel.mask == sideMask) ? white : (gear & pixel.mask) ? red : base;
+                uint32_t c = (pixel.mask == sideMask) ? white : base;
                 for (auto pos : pixel.positions)
                     if (pos < 100) frame[pos] = c;
             }
@@ -656,6 +658,30 @@ void NeoPicoLEDAddon::process() {
 			this->ambientLightLinkage(); //Custom mode
 		}
 	}
+
+    // CUSTOM: Sagat mode - gear colour on the gear buttons' case LEDs, or the LED finder
+    if (g_sagatMode && !g_viperActive && ledOptions.caseRGBIndex >= 0 && ledOptions.caseRGBCount > 0) {
+        float bx = as.GetBrightnessX() * 0.5f;
+        LEDFormat fmt = neopico.GetFormat();
+        int first = ledOptions.caseRGBIndex, count = (int)ledOptions.caseRGBCount;
+        int calib = g_caseCalib;
+        if (calib >= 0) {
+            for (int i = 0; i < count && first + i < 100; i++) frame[first + i] = 0;
+            if (calib < count && first + calib < 100) frame[first + calib] = RGB(255, 255, 255).value(fmt, bx * 2.0f);
+        } else {
+            uint32_t g = g_sagatGearMask;
+            RGB col = (g & GAMEPAD_MASK_L3) ? RGB(0, 200, 255)     // LP  sky blue
+                    : (g & GAMEPAD_MASK_B4) ? RGB(255, 230, 0)     // MP  yellow
+                    : (g & GAMEPAD_MASK_R1) ? RGB(255, 0, 0)       // HP  red
+                    : (g & GAMEPAD_MASK_B1) ? RGB(0, 0, 255)       // LK  dark blue
+                    : (g & GAMEPAD_MASK_B2) ? RGB(255, 60, 180)    // MK  pink
+                    : (g & GAMEPAD_MASK_R2) ? RGB(150, 0, 255)     // HK  purple
+                    : RGB(0, 200, 255);
+            uint32_t c = col.value(fmt, bx);
+            if (GEAR_LED_A >= 0 && GEAR_LED_A < 100) frame[GEAR_LED_A] = c;
+            if (GEAR_LED_B >= 0 && GEAR_LED_B < 100) frame[GEAR_LED_B] = c;
+        }
+    }
 
     neopico.SetFrame(frame);
     neopico.Show();

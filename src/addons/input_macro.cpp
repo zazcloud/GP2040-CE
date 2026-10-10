@@ -34,7 +34,8 @@ volatile bool g_viperFacingRight = true;   // true = player 1 side (left)
 volatile bool g_viperBurnout     = false;
 volatile bool g_sagatMode        = false;   // built-in Sagat macro set active (LEDs light yellow)
 volatile bool g_sagatBurnout     = false;   // Sagat burnout (orange LEDs, X = Level 1)
-volatile uint32_t g_sagatGearMask = 0;      // attack button(s) of the current gear (red LED)
+volatile uint32_t g_sagatGearMask = 0;      // attack button of the current gear (gear LED colour)
+volatile int g_caseCalib = -1;              // LED finder: case LED being lit (-1 = off)
 
 namespace {
     // ---------------------------------------------------------------- tunables
@@ -214,9 +215,11 @@ namespace {
         }
     }
     bool sagatActive = false;
+    uint32_t gearSwallow = 0;
     uint32_t turboPinMask = 0;
     bool togglePinCombo = false;   // Macro 1 pressed while pin 20 held (mode switch)
     bool prevComboMacro1 = false;
+    bool prevComboMacro2 = false;
 
     bool isGearMacro(const Macro& macro) {
         return macro.macroLabel[0] == 'G' && macro.macroLabel[1] == ' ';
@@ -1366,6 +1369,13 @@ void InputMacro::preprocess()
             V.prevQcbPins = 0xFFFFFFFFu; V.prevSuper = 0xFFFFFFFFu; V.prevQcb = true;   // nor counts as a qcb/super press
         }
         prevComboMacro1 = m1;
+        bool m2 = macroPinMasks[1] && (gamepad->debouncedGpio & macroPinMasks[1]);
+        if (t && m2 && !prevComboMacro2) {
+            // pin 20 held + Macro 2: LED finder - light the next case LED (20 presses = off)
+            togglePinCombo = true;
+            g_caseCalib = (g_caseCalib >= 19) ? -1 : g_caseCalib + 1;
+        }
+        prevComboMacro2 = m2;
         if (!t && prevTogglePin && !togglePinCombo && sagatActive) {
             V.facingRight = !V.facingRight;          // Sagat mode: pin 20 alone = side switch
             g_viperFacingRight = V.facingRight;
@@ -1414,7 +1424,10 @@ void InputMacro::preprocess()
         if (airSwallow) { pressedMacro = -1; prevMacroInputPressed = true; }
     }
 
-    // CUSTOM: gear selection (attack held + G macro held for 2 seconds)
+    gearSwallow &= gamepad->state.buttons;
+    gamepad->state.buttons &= ~gearSwallow;
+
+    // CUSTOM: gear selection (attack held, then G macro = instant gear)
     uint32_t attackHeld = gamepad->state.buttons & ATTACK_MASK;
     Mask_t allPins = gamepad->debouncedGpio;
 
@@ -1442,10 +1455,12 @@ void InputMacro::preprocess()
     if (!isMacroRunning && pressedMacro >= 0 && !prevMacroInputPressed && attackHeld &&
             isGearMacro(inputMacroOptions->macroList[pressedMacro]) &&
             !inputMacroOptions->macroList[pressedMacro].useMacroTriggerButton) {
-        gearPendingMacro = pressedMacro;
-        gearPendingMask  = attackHeld;
-        gearPendingStart = now;
-        gearArmed        = (popcount32(attackHeld) == 1); // only one attack allowed
+        // attack held, then gear button: gear changes right away, for every gear macro
+        if (popcount32(attackHeld) == 1) {
+            for (int i = 0; i < MAX_MACRO_LIMIT; i++)
+                if (isGearMacro(inputMacroOptions->macroList[i])) gearMask[i] = attackHeld;
+        }
+        gearSwallow = attackHeld;               // keep that attack away from the game until released
         gamepad->state.buttons &= ~ATTACK_MASK;
         prevMacroInputPressed = true;
         return;
@@ -1454,13 +1469,13 @@ void InputMacro::preprocess()
     // CUSTOM: tell the LEDs which button the gear is on (Sagat mode)
     if (sagatActive) {
         uint32_t gm = 0;
-        for (int i = 0; i < MAX_MACRO_LIMIT; i++) {
+        for (int i = 0; i < MAX_MACRO_LIMIT && !gm; i++) {
             const Macro& mc = inputMacroOptions->macroList[i];
             if (!mc.enabled || !isGearMacro(mc)) continue;
-            if (gearMask[i]) gm |= gearMask[i];
+            if (gearMask[i]) gm = gearMask[i];
             else for (int k = 0; k < (int)mc.macroInputs_count; k++) gm |= mc.macroInputs[k].buttonMask & ATTACK_MASK;
         }
-        g_sagatGearMask = gm;
+        g_sagatGearMask = lowestBit(gm);
     }
 
     checkMacroAction();
