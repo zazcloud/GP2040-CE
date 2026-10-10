@@ -21,6 +21,8 @@ extern volatile bool g_viperActive;
 extern volatile bool g_viperFacingRight;
 extern volatile bool g_viperBurnout;
 extern volatile bool g_sagatMode;
+extern volatile bool g_sagatBurnout;
+extern volatile uint32_t g_sagatGearMask;
 
 #define FRAME_MAX 100
 #define AL_ROW	5
@@ -596,14 +598,20 @@ void NeoPicoLEDAddon::process() {
         }
     }
 
-    // CUSTOM: Sagat mode colors - light (whitish) yellow on every button
+    // CUSTOM: Sagat mode colors (half brightness): light yellow (orange in burnout),
+    // gear button red, side arrow white
     if (g_sagatMode && !g_viperActive) {
-        float bx = as.GetBrightnessX();
+        float bx = as.GetBrightnessX() * 0.5f;
         LEDFormat fmt = neopico.GetFormat();
-        uint32_t c = RGB(255, 235, 140).value(fmt, bx);
+        uint32_t base  = (g_sagatBurnout ? RGB(255, 120, 0) : RGB(255, 235, 140)).value(fmt, bx);
+        uint32_t red   = RGB(255, 0, 0).value(fmt, bx);
+        uint32_t white = RGB(255, 255, 255).value(fmt, bx);
+        uint32_t sideMask = g_viperFacingRight ? GAMEPAD_MASK_DL : GAMEPAD_MASK_DR;
+        uint32_t gear = g_sagatGearMask;
         for (auto &row : matrix.pixels) {
             for (auto &pixel : row) {
                 if (pixel.index < 0 || pixel.mask == 0) continue;
+                uint32_t c = (pixel.mask == sideMask) ? white : (gear & pixel.mask) ? red : base;
                 for (auto pos : pixel.positions)
                     if (pos < 100) frame[pos] = c;
             }

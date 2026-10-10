@@ -33,11 +33,13 @@ volatile bool g_viperActive      = false;
 volatile bool g_viperFacingRight = true;   // true = player 1 side (left)
 volatile bool g_viperBurnout     = false;
 volatile bool g_sagatMode        = false;   // built-in Sagat macro set active (LEDs light yellow)
+volatile bool g_sagatBurnout     = false;   // Sagat burnout (orange LEDs, X = Level 1)
+volatile uint32_t g_sagatGearMask = 0;      // attack button(s) of the current gear (red LED)
 
 namespace {
     // ---------------------------------------------------------------- tunables
     constexpr uint32_t FRAME_US        = 16667;           // 1 frame at 60fps
-    constexpr uint64_t GEAR_HOLD_US    = 2000000;         // 2 seconds
+    constexpr uint64_t GEAR_HOLD_US    = 1000000;         // 1 second
     constexpr uint64_t SKIP_WINDOW_US  = 9 * FRAME_US;    // smart-start window
 
     // Frames -> microseconds (x10 to allow one decimal: F10(12) = 1.2 frames)
@@ -212,6 +214,7 @@ namespace {
         }
     }
     bool sagatActive = false;
+    uint32_t turboPinMask = 0;
     bool togglePinCombo = false;   // Macro 1 pressed while pin 20 held (mode switch)
     bool prevComboMacro1 = false;
 
@@ -286,9 +289,7 @@ namespace {
                 uint32_t m = macro.macroInputs[i].buttonMask;
                 if (m & ATTACK_MASK) stepDuration[i] = randomRange(BTN_MIN_US, BTN_MAX_US);
                 else if (m & DIR_MASK)
-                    stepDuration[i] = (randomRange(1, 100) <= VIPER_FAST_PCT)
-                        ? randomRange(FAST_MIN_US, FAST_MID_US)
-                        : randomRange(FAST_MID_US, FAST_MAX_US);
+                    stepDuration[i] = randomRange(F10(12), F10(22));   // arrows 1.2-2.2f
                 else stepDuration[i] = macro.macroInputs[i].duration;
             }
             return;
@@ -312,6 +313,8 @@ namespace {
             } else if (mask & DIR_MASK) {
                 if (isOD && firstAttack >= 0 && i > firstAttack) {
                     stepDuration[i] = randomRange(BLOCK_MIN_US, BLOCK_MAX_US);
+                } else if (isGearMacro(macro)) {
+                    stepDuration[i] = randomRange(F10(12), F10(22));   // gear (DP) macro arrows 1.2-2.2f
                 } else {
                     stepDuration[i] = randomRange(DIR_MIN_US, DIR_MAX_US);
                 }
@@ -1004,6 +1007,39 @@ namespace {
     }
 
     bool viperLocked(uint64_t now) { return now < V.airUntil; }
+
+    // ---------------- Sagat mode extras: burnout (turbo button) and X = Level 1
+    bool prevTurbo = false;
+    bool prevSagatX = false;
+    void seqSagatLevel1() {                     // qcf qcf + random punch, arrows 1.2-2.1f, human error
+        vClear();
+        for (uint8_t d : {D_, DF, F_, D_, DF}) vPush(d, 0, randomRange(F10(12), F10(21)));
+        static const uint32_t P[3] = {LP, MP, HP};
+        uint32_t dur = vBtn();
+        vPush(F_, P[nextRandom() % 3], dur);
+        V.seq[V.seqLen - 1].heCut = humanErrorCut(dur);
+    }
+    // Returns true when it owns the output this poll.
+    bool sagatProcess(Gamepad* gp, uint64_t now, uint32_t turboPin, bool macroBusy) {
+        bool tb = turboPin && (gp->debouncedGpio & turboPin);
+        if (tb && !prevTurbo) { g_sagatBurnout = !g_sagatBurnout; }
+        prevTurbo = tb;
+        uint32_t phys = gp->state.buttons;
+        bool x = (phys & XBTN) != 0;
+        bool xRising = x && !prevSagatX;
+        prevSagatX = x;
+        if (V.playing) {
+            if (runSeq(gp, now, toRel(gp->state.dpad))) return true;
+        }
+        if (g_sagatBurnout) {
+            gp->state.buttons &= ~XBTN;           // X never reaches the game in burnout
+            if (xRising && !macroBusy) {
+                seqSagatLevel1(); startSeq(now, 0, 0);
+                if (runSeq(gp, now, toRel(gp->state.dpad))) return true;
+            }
+        }
+        return false;
+    }
 }
 
 bool InputMacro::available() {
@@ -1064,6 +1100,9 @@ void InputMacro::setup() {
                 break;
             case GpioAction::BUTTON_PRESS_MACRO_6:
                 macroPinMasks[5] = 1 << pin;
+                break;
+            case GpioAction::BUTTON_PRESS_TURBO:
+                turboPinMask = 1u << pin;
                 break;
             default:
                 break;
@@ -1327,7 +1366,10 @@ void InputMacro::preprocess()
             V.prevQcbPins = 0xFFFFFFFFu; V.prevSuper = 0xFFFFFFFFu; V.prevQcb = true;   // nor counts as a qcb/super press
         }
         prevComboMacro1 = m1;
-        if (!t && prevTogglePin && !togglePinCombo && viperMode) {
+        if (!t && prevTogglePin && !togglePinCombo && sagatActive) {
+            V.facingRight = !V.facingRight;          // Sagat mode: pin 20 alone = side switch
+            g_viperFacingRight = V.facingRight;
+        } else if (!t && prevTogglePin && !togglePinCombo && viperMode) {
             // pin 20 alone (released, no Macro 1): macros on/off, Viper mode only
             macrosOn = !macrosOn;
             if (!macrosOn) {
@@ -1355,6 +1397,12 @@ void InputMacro::preprocess()
             return;
         }
         if (V.superCancel) { V.superCancel = false; prevMacroInputPressed = false; }   // super fires now
+    }
+    if (sagatActive) {
+        if (sagatProcess(gamepad, now, turboPinMask, isMacroRunning)) {
+            prevMacroInputPressed = true;
+            return;
+        }
     }
 
     checkMacroPress();
@@ -1403,6 +1451,18 @@ void InputMacro::preprocess()
         return;
     }
 
+    // CUSTOM: tell the LEDs which button the gear is on (Sagat mode)
+    if (sagatActive) {
+        uint32_t gm = 0;
+        for (int i = 0; i < MAX_MACRO_LIMIT; i++) {
+            const Macro& mc = inputMacroOptions->macroList[i];
+            if (!mc.enabled || !isGearMacro(mc)) continue;
+            if (gearMask[i]) gm |= gearMask[i];
+            else for (int k = 0; k < (int)mc.macroInputs_count; k++) gm |= mc.macroInputs[k].buttonMask & ATTACK_MASK;
+        }
+        g_sagatGearMask = gm;
+    }
+
     checkMacroAction();
     runCurrentMacro();
 }
@@ -1434,6 +1494,9 @@ void InputMacro::reinit() {
                 break;
             case GpioAction::BUTTON_PRESS_MACRO_6:
                 macroPinMasks[5] = 1 << pin;
+                break;
+            case GpioAction::BUTTON_PRESS_TURBO:
+                turboPinMask = 1u << pin;
                 break;
             default:
                 break;
