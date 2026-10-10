@@ -32,6 +32,7 @@
 volatile bool g_viperActive      = false;
 volatile bool g_viperFacingRight = true;   // true = player 1 side (left)
 volatile bool g_viperBurnout     = false;
+volatile bool g_sagatMode        = false;   // built-in Sagat macro set active (LEDs light yellow)
 
 namespace {
     // ---------------------------------------------------------------- tunables
@@ -134,6 +135,85 @@ namespace {
     bool macrosOn = true;
     bool prevTogglePin = false;
     bool airSwallow = false;   // macro button pressed in the air: ignore it until released
+
+    // CUSTOM: Sagat macro set (from final.gp2040), built into the firmware
+    MacroOptions g_sagatOpts;
+    void buildSagatOptions() {
+        MacroOptions& o = g_sagatOpts;
+        memset(&o, 0, sizeof(o));
+        o.has_enabled = true; o.enabled = true; o.macroList_count = 6;
+        { Macro& m = o.macroList[0];
+          m.has_enabled = true; m.enabled = true; m.has_exclusive = true; m.exclusive = true;
+          m.has_interruptible = true; m.interruptible = false; m.has_showFrames = true; m.showFrames = true;
+          m.has_macroType = true; m.macroType = (MacroType)1; m.has_useMacroTriggerButton = true; m.useMacroTriggerButton = false;
+          m.has_macroLabel = true; strncpy(m.macroLabel, "G DP right", sizeof(m.macroLabel) - 1);
+          m.macroInputs_count = 3;
+          m.macroInputs[0].has_buttonMask = true; m.macroInputs[0].buttonMask = 524288u; m.macroInputs[0].has_duration = true; m.macroInputs[0].duration = 24999u; m.macroInputs[0].has_waitDuration = true; m.macroInputs[0].waitDuration = 0u;
+          m.macroInputs[1].has_buttonMask = true; m.macroInputs[1].buttonMask = 655360u; m.macroInputs[1].has_duration = true; m.macroInputs[1].duration = 23332u; m.macroInputs[1].has_waitDuration = true; m.macroInputs[1].waitDuration = 0u;
+          m.macroInputs[2].has_buttonMask = true; m.macroInputs[2].buttonMask = 525312u; m.macroInputs[2].has_duration = true; m.macroInputs[2].duration = 33332u; m.macroInputs[2].has_waitDuration = true; m.macroInputs[2].waitDuration = 0u;
+        }
+        { Macro& m = o.macroList[1];
+          m.has_enabled = true; m.enabled = true; m.has_exclusive = true; m.exclusive = true;
+          m.has_interruptible = true; m.interruptible = false; m.has_showFrames = true; m.showFrames = true;
+          m.has_macroType = true; m.macroType = (MacroType)1; m.has_useMacroTriggerButton = true; m.useMacroTriggerButton = false;
+          m.has_macroLabel = true; strncpy(m.macroLabel, "G DP left", sizeof(m.macroLabel) - 1);
+          m.macroInputs_count = 3;
+          m.macroInputs[0].has_buttonMask = true; m.macroInputs[0].buttonMask = 262144u; m.macroInputs[0].has_duration = true; m.macroInputs[0].duration = 23332u; m.macroInputs[0].has_waitDuration = true; m.macroInputs[0].waitDuration = 0u;
+          m.macroInputs[1].has_buttonMask = true; m.macroInputs[1].buttonMask = 393216u; m.macroInputs[1].has_duration = true; m.macroInputs[1].duration = 23332u; m.macroInputs[1].has_waitDuration = true; m.macroInputs[1].waitDuration = 0u;
+          m.macroInputs[2].has_buttonMask = true; m.macroInputs[2].buttonMask = 263168u; m.macroInputs[2].has_duration = true; m.macroInputs[2].duration = 49998u; m.macroInputs[2].has_waitDuration = true; m.macroInputs[2].waitDuration = 0u;
+        }
+        { Macro& m = o.macroList[2];
+          m.has_enabled = true; m.enabled = true; m.has_exclusive = true; m.exclusive = true;
+          m.has_interruptible = true; m.interruptible = false; m.has_showFrames = true; m.showFrames = true;
+          m.has_macroType = true; m.macroType = (MacroType)1; m.has_useMacroTriggerButton = true; m.useMacroTriggerButton = false;
+          m.has_macroLabel = true; strncpy(m.macroLabel, "super right ", sizeof(m.macroLabel) - 1);
+          m.macroInputs_count = 6;
+          m.macroInputs[0].has_buttonMask = true; m.macroInputs[0].buttonMask = 131072u; m.macroInputs[0].has_duration = true; m.macroInputs[0].duration = 39996u; m.macroInputs[0].has_waitDuration = true; m.macroInputs[0].waitDuration = 0u;
+          m.macroInputs[1].has_buttonMask = true; m.macroInputs[1].buttonMask = 655360u; m.macroInputs[1].has_duration = true; m.macroInputs[1].duration = 24165u; m.macroInputs[1].has_waitDuration = true; m.macroInputs[1].waitDuration = 0u;
+          m.macroInputs[2].has_buttonMask = true; m.macroInputs[2].buttonMask = 524288u; m.macroInputs[2].has_duration = true; m.macroInputs[2].duration = 24999u; m.macroInputs[2].has_waitDuration = true; m.macroInputs[2].waitDuration = 0u;
+          m.macroInputs[3].has_buttonMask = true; m.macroInputs[3].buttonMask = 131072u; m.macroInputs[3].has_duration = true; m.macroInputs[3].duration = 23332u; m.macroInputs[3].has_waitDuration = true; m.macroInputs[3].waitDuration = 0u;
+          m.macroInputs[4].has_buttonMask = true; m.macroInputs[4].buttonMask = 655360u; m.macroInputs[4].has_duration = true; m.macroInputs[4].duration = 23330u; m.macroInputs[4].has_waitDuration = true; m.macroInputs[4].waitDuration = 0u;
+          m.macroInputs[5].has_buttonMask = true; m.macroInputs[5].buttonMask = 524416u; m.macroInputs[5].has_duration = true; m.macroInputs[5].duration = 39996u; m.macroInputs[5].has_waitDuration = true; m.macroInputs[5].waitDuration = 0u;
+        }
+        { Macro& m = o.macroList[3];
+          m.has_enabled = true; m.enabled = true; m.has_exclusive = true; m.exclusive = true;
+          m.has_interruptible = true; m.interruptible = false; m.has_showFrames = true; m.showFrames = true;
+          m.has_macroType = true; m.macroType = (MacroType)1; m.has_useMacroTriggerButton = true; m.useMacroTriggerButton = false;
+          m.has_macroLabel = true; strncpy(m.macroLabel, "super left ", sizeof(m.macroLabel) - 1);
+          m.macroInputs_count = 6;
+          m.macroInputs[0].has_buttonMask = true; m.macroInputs[0].buttonMask = 131072u; m.macroInputs[0].has_duration = true; m.macroInputs[0].duration = 23330u; m.macroInputs[0].has_waitDuration = true; m.macroInputs[0].waitDuration = 0u;
+          m.macroInputs[1].has_buttonMask = true; m.macroInputs[1].buttonMask = 393216u; m.macroInputs[1].has_duration = true; m.macroInputs[1].duration = 24999u; m.macroInputs[1].has_waitDuration = true; m.macroInputs[1].waitDuration = 0u;
+          m.macroInputs[2].has_buttonMask = true; m.macroInputs[2].buttonMask = 262144u; m.macroInputs[2].has_duration = true; m.macroInputs[2].duration = 24999u; m.macroInputs[2].has_waitDuration = true; m.macroInputs[2].waitDuration = 0u;
+          m.macroInputs[3].has_buttonMask = true; m.macroInputs[3].buttonMask = 131072u; m.macroInputs[3].has_duration = true; m.macroInputs[3].duration = 23330u; m.macroInputs[3].has_waitDuration = true; m.macroInputs[3].waitDuration = 0u;
+          m.macroInputs[4].has_buttonMask = true; m.macroInputs[4].buttonMask = 393216u; m.macroInputs[4].has_duration = true; m.macroInputs[4].duration = 39996u; m.macroInputs[4].has_waitDuration = true; m.macroInputs[4].waitDuration = 0u;
+          m.macroInputs[5].has_buttonMask = true; m.macroInputs[5].buttonMask = 262272u; m.macroInputs[5].has_duration = true; m.macroInputs[5].duration = 56662u; m.macroInputs[5].has_waitDuration = true; m.macroInputs[5].waitDuration = 0u;
+        }
+        { Macro& m = o.macroList[4];
+          m.has_enabled = true; m.enabled = true; m.has_exclusive = true; m.exclusive = true;
+          m.has_interruptible = true; m.interruptible = false; m.has_showFrames = true; m.showFrames = true;
+          m.has_macroType = true; m.macroType = (MacroType)1; m.has_useMacroTriggerButton = true; m.useMacroTriggerButton = false;
+          m.has_macroLabel = true; strncpy(m.macroLabel, "dp right o", sizeof(m.macroLabel) - 1);
+          m.macroInputs_count = 4;
+          m.macroInputs[0].has_buttonMask = true; m.macroInputs[0].buttonMask = 524288u; m.macroInputs[0].has_duration = true; m.macroInputs[0].duration = 26664u; m.macroInputs[0].has_waitDuration = true; m.macroInputs[0].waitDuration = 0u;
+          m.macroInputs[1].has_buttonMask = true; m.macroInputs[1].buttonMask = 655360u; m.macroInputs[1].has_duration = true; m.macroInputs[1].duration = 23332u; m.macroInputs[1].has_waitDuration = true; m.macroInputs[1].waitDuration = 0u;
+          m.macroInputs[2].has_buttonMask = true; m.macroInputs[2].buttonMask = 525344u; m.macroInputs[2].has_duration = true; m.macroInputs[2].duration = 39996u; m.macroInputs[2].has_waitDuration = true; m.macroInputs[2].waitDuration = 0u;
+          m.macroInputs[3].has_buttonMask = true; m.macroInputs[3].buttonMask = 393216u; m.macroInputs[3].has_duration = true; m.macroInputs[3].duration = 73328u; m.macroInputs[3].has_waitDuration = true; m.macroInputs[3].waitDuration = 0u;
+        }
+        { Macro& m = o.macroList[5];
+          m.has_enabled = true; m.enabled = true; m.has_exclusive = true; m.exclusive = true;
+          m.has_interruptible = true; m.interruptible = false; m.has_showFrames = true; m.showFrames = true;
+          m.has_macroType = true; m.macroType = (MacroType)1; m.has_useMacroTriggerButton = true; m.useMacroTriggerButton = false;
+          m.has_macroLabel = true; strncpy(m.macroLabel, "dp left oo", sizeof(m.macroLabel) - 1);
+          m.macroInputs_count = 4;
+          m.macroInputs[0].has_buttonMask = true; m.macroInputs[0].buttonMask = 262144u; m.macroInputs[0].has_duration = true; m.macroInputs[0].duration = 39996u; m.macroInputs[0].has_waitDuration = true; m.macroInputs[0].waitDuration = 0u;
+          m.macroInputs[1].has_buttonMask = true; m.macroInputs[1].buttonMask = 393216u; m.macroInputs[1].has_duration = true; m.macroInputs[1].duration = 23330u; m.macroInputs[1].has_waitDuration = true; m.macroInputs[1].waitDuration = 0u;
+          m.macroInputs[2].has_buttonMask = true; m.macroInputs[2].buttonMask = 263200u; m.macroInputs[2].has_duration = true; m.macroInputs[2].duration = 56662u; m.macroInputs[2].has_waitDuration = true; m.macroInputs[2].waitDuration = 0u;
+          m.macroInputs[3].has_buttonMask = true; m.macroInputs[3].buttonMask = 655360u; m.macroInputs[3].has_duration = true; m.macroInputs[3].duration = 123326u; m.macroInputs[3].has_waitDuration = true; m.macroInputs[3].waitDuration = 0u;
+        }
+    }
+    bool sagatActive = false;
+    bool togglePinCombo = false;   // Macro 1 pressed while pin 20 held (mode switch)
+    bool prevComboMacro1 = false;
 
     bool isGearMacro(const Macro& macro) {
         return macro.macroLabel[0] == 'G' && macro.macroLabel[1] == ' ';
@@ -990,8 +1070,11 @@ void InputMacro::setup() {
         }
     }
 
-    inputMacroOptions = &Storage::getInstance().getAddonOptions().macroOptions;
-    if (inputMacroOptions->macroBoardLedEnabled && isValidPin(BOARD_LED_PIN)) {
+    buildSagatOptions();
+    sagatActive = true;                 // power-up in the built-in Sagat set
+    g_sagatMode = true;
+    inputMacroOptions = &g_sagatOpts;
+    if (Storage::getInstance().getAddonOptions().macroOptions.macroBoardLedEnabled && isValidPin(BOARD_LED_PIN)) {
         gpio_init(BOARD_LED_PIN);
         gpio_set_dir(BOARD_LED_PIN, GPIO_OUT);
         boardLedEnabled = true;
@@ -1226,7 +1309,26 @@ void InputMacro::preprocess()
             if (pm[20].action == GpioAction::BUTTON_PRESS_A1) gamepad->state.buttons &= ~GAMEPAD_MASK_A1;
             if (pm[20].action == GpioAction::BUTTON_PRESS_A2) gamepad->state.buttons &= ~GAMEPAD_MASK_A2;
         }
-        if (t && !prevTogglePin) {
+        bool m1 = macroPinMasks[0] && (gamepad->debouncedGpio & macroPinMasks[0]);
+        if (t && !prevTogglePin) togglePinCombo = false;
+        if (t && m1 && !prevComboMacro1) {
+            // pin 20 held + Macro 1: switch between the built-in Sagat set and the stored (Viper) set
+            togglePinCombo = true;
+            reset();
+            V.playing = false; V.win = W_NONE; V.chordPending = false; V.lv2Pending = false; V.delayedAt = 0; V.pendMask = 0;
+            V.suppress = 0; V.rawPending = false;
+            gearPendingMacro = -1;
+            sagatActive = !sagatActive;
+            g_sagatMode = sagatActive;
+            inputMacroOptions = sagatActive ? &g_sagatOpts : &Storage::getInstance().getAddonOptions().macroOptions;
+            macrosOn = true;
+            detectViperMode(inputMacroOptions);
+            prevMacroInputPressed = true;    // the Macro 1 press used for the switch never fires
+            V.prevQcbPins = 0xFFFFFFFFu; V.prevSuper = 0xFFFFFFFFu; V.prevQcb = true;   // nor counts as a qcb/super press
+        }
+        prevComboMacro1 = m1;
+        if (!t && prevTogglePin && !togglePinCombo && viperMode) {
+            // pin 20 alone (released, no Macro 1): macros on/off, Viper mode only
             macrosOn = !macrosOn;
             if (!macrosOn) {
                 reset();
@@ -1237,6 +1339,7 @@ void InputMacro::preprocess()
             g_viperActive = viperMode && macrosOn;
         }
         prevTogglePin = t;
+        if (t) { prevMacroInputPressed = true; return; }   // holding pin 20: no macros
         if (!macrosOn) return;
     }
 

@@ -20,6 +20,7 @@
 extern volatile bool g_viperActive;
 extern volatile bool g_viperFacingRight;
 extern volatile bool g_viperBurnout;
+extern volatile bool g_sagatMode;
 
 #define FRAME_MAX 100
 #define AL_ROW	5
@@ -589,6 +590,20 @@ void NeoPicoLEDAddon::process() {
                 if (pixel.index < 0 || pixel.mask == 0) continue;
                 bool lit = (buttonState & pixel.mask) || (pixel.mask == sideMask);
                 uint32_t c = lit ? white : base;
+                for (auto pos : pixel.positions)
+                    if (pos < 100) frame[pos] = c;
+            }
+        }
+    }
+
+    // CUSTOM: Sagat mode colors - light (whitish) yellow on every button
+    if (g_sagatMode && !g_viperActive) {
+        float bx = as.GetBrightnessX();
+        LEDFormat fmt = neopico.GetFormat();
+        uint32_t c = RGB(255, 235, 140).value(fmt, bx);
+        for (auto &row : matrix.pixels) {
+            for (auto &pixel : row) {
+                if (pixel.index < 0 || pixel.mask == 0) continue;
                 for (auto pos : pixel.positions)
                     if (pos < 100) frame[pos] = c;
             }
