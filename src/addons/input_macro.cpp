@@ -34,8 +34,7 @@ volatile bool g_viperFacingRight = true;   // true = player 1 side (left)
 volatile bool g_viperBurnout     = false;
 volatile bool g_sagatMode        = false;   // built-in Sagat macro set active (LEDs light yellow)
 volatile bool g_sagatBurnout     = false;   // Sagat burnout (orange LEDs, X = Level 1)
-volatile uint32_t g_sagatGearMask = 0;      // attack button of the current gear (gear LED colour)
-volatile int g_caseCalib = -1;              // LED finder: case LED being lit (-1 = off)
+volatile uint32_t g_sagatGearMask = 0;      // attack button of the current gear (red LED)
 
 namespace {
     // ---------------------------------------------------------------- tunables
@@ -219,7 +218,6 @@ namespace {
     uint32_t turboPinMask = 0;
     bool togglePinCombo = false;   // Macro 1 pressed while pin 20 held (mode switch)
     bool prevComboMacro1 = false;
-    bool prevComboMacro2 = false;
 
     bool isGearMacro(const Macro& macro) {
         return macro.macroLabel[0] == 'G' && macro.macroLabel[1] == ' ';
@@ -1369,13 +1367,7 @@ void InputMacro::preprocess()
             V.prevQcbPins = 0xFFFFFFFFu; V.prevSuper = 0xFFFFFFFFu; V.prevQcb = true;   // nor counts as a qcb/super press
         }
         prevComboMacro1 = m1;
-        bool m2 = macroPinMasks[1] && (gamepad->debouncedGpio & macroPinMasks[1]);
-        if (t && m2 && !prevComboMacro2) {
-            // pin 20 held + Macro 2: LED finder - light the next case LED (20 presses = off)
-            togglePinCombo = true;
-            g_caseCalib = (g_caseCalib >= 19) ? -1 : g_caseCalib + 1;
-        }
-        prevComboMacro2 = m2;
+
         if (!t && prevTogglePin && !togglePinCombo && sagatActive) {
             V.facingRight = !V.facingRight;          // Sagat mode: pin 20 alone = side switch
             g_viperFacingRight = V.facingRight;
