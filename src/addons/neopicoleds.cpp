@@ -24,6 +24,37 @@ extern volatile bool g_sagatMode;
 extern volatile bool g_sagatBurnout;
 extern volatile uint32_t g_sagatGearMask;
 
+// CUSTOM: the LED under each physical button follows the board's original wiring
+// (pin -> LED index), not the remapped button. Find the LED of the physical button
+// that currently sends `mask` (e.g. LP moved to another button lights that button).
+static int physLedForMask(uint32_t mask) {
+    static const int8_t pinLed[30] = {
+        -1, -1,  3,  1,  2,  0,  8,  9, 10, 11,   // pins 0-9
+         4,  5,  6,  7, -1, -1, -1, -1, 13, 14,   // pins 10-19
+        12, 15, -1, -1, -1, -1, -1, -1, -1, -1 }; // pins 20-29
+    GpioMappingInfo* pm = Storage::getInstance().getProfilePinMappings();
+    for (int pin = 0; pin < 30; pin++) {
+        uint32_t m = 0;
+        switch (pm[pin].action) {
+            case GpioAction::BUTTON_PRESS_B1: m = GAMEPAD_MASK_B1; break;
+            case GpioAction::BUTTON_PRESS_B2: m = GAMEPAD_MASK_B2; break;
+            case GpioAction::BUTTON_PRESS_B3: m = GAMEPAD_MASK_B3; break;
+            case GpioAction::BUTTON_PRESS_B4: m = GAMEPAD_MASK_B4; break;
+            case GpioAction::BUTTON_PRESS_L1: m = GAMEPAD_MASK_L1; break;
+            case GpioAction::BUTTON_PRESS_R1: m = GAMEPAD_MASK_R1; break;
+            case GpioAction::BUTTON_PRESS_L2: m = GAMEPAD_MASK_L2; break;
+            case GpioAction::BUTTON_PRESS_R2: m = GAMEPAD_MASK_R2; break;
+            case GpioAction::BUTTON_PRESS_A1: m = GAMEPAD_MASK_A1; break;
+            case GpioAction::BUTTON_PRESS_A2: m = GAMEPAD_MASK_A2; break;
+            case GpioAction::BUTTON_PRESS_L3: m = GAMEPAD_MASK_L3; break;
+            case GpioAction::BUTTON_PRESS_R3: m = GAMEPAD_MASK_R3; break;
+            default: break;
+        }
+        if (m && m == mask && pinLed[pin] >= 0) return pinLed[pin];
+    }
+    return -1;
+}
+
 
 #define FRAME_MAX 100
 #define AL_ROW	5
@@ -591,11 +622,18 @@ void NeoPicoLEDAddon::process() {
         for (auto &row : matrix.pixels) {
             for (auto &pixel : row) {
                 if (pixel.index < 0 || pixel.mask == 0) continue;
-                bool lit = (buttonState & pixel.mask) || (pixel.mask == sideMask);
+                bool dir = pixel.mask >= (1u << 16);
+                bool lit = (dir && (buttonState & pixel.mask)) || (pixel.mask == sideMask);
                 uint32_t c = lit ? white : base;
                 for (auto pos : pixel.positions)
                     if (pos < 100) frame[pos] = c;
             }
+        }
+        for (int b = 0; b < 16; b++) {              // pressed buttons: light the physical button
+            uint32_t m = 1u << b;
+            if (!(buttonState & m)) continue;
+            int idx = physLedForMask(m);
+            if (idx >= 0 && idx < 100) frame[idx] = white;
         }
     }
 
@@ -612,11 +650,13 @@ void NeoPicoLEDAddon::process() {
         for (auto &row : matrix.pixels) {
             for (auto &pixel : row) {
                 if (pixel.index < 0 || pixel.mask == 0) continue;
-                uint32_t c = (pixel.mask == sideMask) ? white : (gear & pixel.mask) ? red : base;
+                uint32_t c = (pixel.mask == sideMask) ? white : base;
                 for (auto pos : pixel.positions)
                     if (pos < 100) frame[pos] = c;
             }
         }
+        int gidx = gear ? physLedForMask(gear) : -1;   // the physical button the gear is on
+        if (gidx >= 0 && gidx < 100) frame[gidx] = red;
     }
 
     // Apply the player LEDs to our first 4 leds if we're in NEOPIXEL mode
