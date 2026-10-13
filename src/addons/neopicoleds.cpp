@@ -22,6 +22,7 @@ extern volatile bool g_viperFacingRight;
 extern volatile bool g_viperBurnout;
 extern volatile bool g_sagatMode;
 extern volatile bool g_sagatBurnout;
+extern volatile bool g_pinkMode;
 extern volatile uint32_t g_sagatGearMask;
 
 // CUSTOM: the LED under each physical button follows the board's original wiring
@@ -642,7 +643,7 @@ void NeoPicoLEDAddon::process() {
     if (g_sagatMode && !g_viperActive) {
         float bx = as.GetBrightnessX() * 0.5f;
         LEDFormat fmt = neopico.GetFormat();
-        uint32_t base  = (g_sagatBurnout ? RGB(255, 120, 0) : RGB(255, 235, 140)).value(fmt, bx);
+        uint32_t base  = (g_sagatBurnout ? RGB(255, 120, 0) : g_pinkMode ? RGB(255, 140, 200) : RGB(255, 235, 140)).value(fmt, bx);
         uint32_t red   = RGB(255, 0, 0).value(fmt, bx);
         uint32_t white = RGB(255, 255, 255).value(fmt, bx);
         uint32_t sideMask = g_viperFacingRight ? GAMEPAD_MASK_DL : GAMEPAD_MASK_DR;

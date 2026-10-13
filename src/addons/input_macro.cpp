@@ -34,6 +34,7 @@ volatile bool g_viperFacingRight = true;   // true = player 1 side (left)
 volatile bool g_viperBurnout     = false;
 volatile bool g_sagatMode        = false;   // built-in Sagat macro set active (LEDs light yellow)
 volatile bool g_sagatBurnout     = false;   // Sagat burnout (orange LEDs, X = Level 1)
+volatile bool g_pinkMode         = false;   // third built-in profile active (pink LEDs)
 volatile uint32_t g_sagatGearMask = 0;      // attack button of the current gear (red LED)
 
 namespace {
@@ -213,8 +214,23 @@ namespace {
           m.macroInputs[3].has_buttonMask = true; m.macroInputs[3].buttonMask = 655360u; m.macroInputs[3].has_duration = true; m.macroInputs[3].duration = 123326u; m.macroInputs[3].has_waitDuration = true; m.macroInputs[3].waitDuration = 0u;
         }
     }
-    bool sagatActive = false;
+    bool sagatActive = false;       // a built-in profile (Sagat or pink) is active
+    bool pinkActive = false;        // the third profile (command grab character)
+    int  profileIdx = 0;            // 0 = Sagat, 1 = stored config (Viper), 2 = pink
+    MacroOptions g_pinkOpts;
+    void buildPinkOptions() {
+        g_pinkOpts = g_sagatOpts;
+        // Macro 1/2 (gear) and 5/6 (command grab) are run by the pink engine, not as plain macros
+        g_pinkOpts.macroList[0].enabled = false;
+        g_pinkOpts.macroList[1].enabled = false;
+        g_pinkOpts.macroList[4].enabled = false;
+        g_pinkOpts.macroList[5].enabled = false;
+        // supers swapped: Macro 3 = Sagat's left super, Macro 4 = Sagat's right super
+        g_pinkOpts.macroList[2] = g_sagatOpts.macroList[3];
+        g_pinkOpts.macroList[3] = g_sagatOpts.macroList[2];
+    }
     uint32_t gearSwallow = 0;
+    bool superLight = false;        // this super ends with the light (true) or heavy button
     uint32_t turboPinMask = 0;
     bool togglePinCombo = false;   // Macro 1 pressed while pin 20 held (mode switch)
     bool prevComboMacro1 = false;
@@ -258,6 +274,7 @@ namespace {
 
         // ---------------- supers: fast arrows + human error
         if (isSuperMacro(macro)) {
+            superLight = coin();            // random light / heavy version of the button
             int arrows[MAX_STEPS]; int na = 0;
             for (int i = 0; i < n; i++) {
                 uint32_t m = macro.macroInputs[i].buttonMask;
@@ -616,8 +633,8 @@ namespace {
         vPush(lastDir, btn, dur);
         V.seq[V.seqLen - 1].heCut = humanErrorCut(dur);
     }
-    void seqLevel1() { superArrowsAndFinish({D_, DF, F_, D_, DF}, F_, HK); }
-    void seqLevel2() { superArrowsAndFinish({D_, DB, B_, D_, DB}, B_, HP); }
+    void seqLevel1() { superArrowsAndFinish({D_, DF, F_, D_, DF}, F_, coin() ? LK : HK); }
+    void seqLevel2() { superArrowsAndFinish({D_, DB, B_, D_, DB}, B_, coin() ? LP : HP); }
 
     void startSeq(uint64_t now, uint32_t trigger, uint64_t guardUs) {
         V.playing = V.seqLen > 0;
@@ -1012,13 +1029,83 @@ namespace {
     // ---------------- Sagat mode extras: burnout (turbo button) and X = Level 1
     bool prevTurbo = false;
     bool prevSagatX = false;
-    void seqSagatLevel1() {                     // qcf qcf + random punch, arrows 1.2-2.1f, human error
+    void seqSagatLevel1(bool mirror) {          // qcf qcf (qcb qcb if mirrored) + LP or HP, 1.2-2.1f, human error
         vClear();
-        for (uint8_t d : {D_, DF, F_, D_, DF}) vPush(d, 0, randomRange(F10(12), F10(21)));
-        static const uint32_t P[3] = {LP, MP, HP};
+        uint8_t df = mirror ? DB : DF, f = mirror ? B_ : F_;
+        for (uint8_t d : {D_, df, f, D_, df}) vPush(d, 0, randomRange(F10(12), F10(21)));
         uint32_t dur = vBtn();
-        vPush(F_, P[nextRandom() % 3], dur);
+        vPush(f, coin() ? LP : HP, dur);
         V.seq[V.seqLen - 1].heCut = humanErrorCut(dur);
+    }
+
+    // ---------------- pink profile: gear qcf / ↓HP x2, both-sides command grab
+    uint32_t pinkGear = LP;
+    bool cgrab = false, cgrabOD = false;
+    uint32_t prevPinkPins = 0;
+    // relative code for an absolute direction (horiz: +1 right, -1 left, 0 none)
+    uint8_t absDir(bool down, int horiz) {
+        uint8_t r = down ? D_ : 0;
+        if (horiz) r |= ((horiz > 0) == V.facingRight) ? F_ : B_;
+        return r;
+    }
+    void seqPinkGear(int side) {                // side +1 = right version, -1 = left version
+        vClear();
+        auto ar = [](){ return randomRange(F10(12), F10(22)); };
+        if (pinkGear == HP) {                   // ↓ + HP twice
+            vPush(D_, HP, randomRange(F10(30), F10(50)));
+            vPush(D_, 0, randomRange(F10(100), F10(150)));
+            vPush(D_, HP, randomRange(F10(30), F10(50)));
+            return;
+        }
+        vPush(absDir(true, 0), 0, ar());
+        vPush(absDir(true, side), 0, ar());
+        vPush(absDir(false, side), pinkGear == MP ? (LK | MK) : LK, vBtn());
+    }
+    void seqCommandGrab(uint32_t punch) {       // → ↘ ↙ ← ↙ ↘ → + punch (works on both sides)
+        vClear();
+        auto ar = [](){ return randomRange(F10(12), F10(20)); };
+        vPush(absDir(false, +1), 0, ar());
+        vPush(absDir(true, +1), 0, ar());
+        vPush(absDir(true, -1), 0, ar());
+        vPush(absDir(false, -1), 0, ar());
+        vPush(absDir(true, -1), 0, ar());
+        vPush(absDir(true, +1), 0, ar());
+        vPush(absDir(false, +1), punch, vBtn());
+    }
+    bool pinkProcess(Gamepad* gp, uint64_t now, uint32_t m1, uint32_t m2, uint32_t m5, uint32_t m6, bool macroBusy) {
+        uint32_t pins = (uint32_t)gp->debouncedGpio & (m1 | m2 | m5 | m6);
+        uint32_t rise = pins & ~prevPinkPins;
+        prevPinkPins = pins;
+        uint32_t phys = gp->state.buttons;
+        V.suppress &= phys;                     // released buttons are no longer hidden
+        if (V.playing) {
+            if (cgrab) {
+                if ((phys & HP) && !(V.suppress & HP)) { cgrabOD = true; V.suppress |= HP; }
+                if (cgrabOD && V.seqPos < V.seqLen - 1) V.seq[V.seqLen - 1].btn = LP | HP;   // OD window: until the last →
+            }
+            if (runSeq(gp, now, toRel(gp->state.dpad))) return true;
+            cgrab = false;
+        }
+        if (!rise || macroBusy) return false;
+        if (rise & (m1 | m2)) {
+            uint32_t held = phys & ATTACK_MASK;
+            if (held) {                         // punch held + gear button = choose the gear (punches only)
+                if (popcount32(held) == 1 && (held & PUNCH_MASK)) pinkGear = held;
+                V.suppress |= held;
+                return false;
+            }
+            seqPinkGear((rise & m1) ? +1 : -1);
+            startSeq(now, 0, 0); cgrab = false;
+            return runSeq(gp, now, toRel(gp->state.dpad));
+        }
+        if (rise & (m5 | m6)) {
+            seqCommandGrab((rise & m5) ? LP : HP);
+            cgrab = true; cgrabOD = (phys & HP) != 0;
+            if (cgrabOD) { V.suppress |= HP; V.seq[V.seqLen - 1].btn = LP | HP; }
+            startSeq(now, 0, 0);
+            return runSeq(gp, now, toRel(gp->state.dpad));
+        }
+        return false;
     }
     // Returns true when it owns the output this poll.
     bool sagatProcess(Gamepad* gp, uint64_t now, uint32_t turboPin, bool macroBusy) {
@@ -1035,7 +1122,7 @@ namespace {
         if (g_sagatBurnout) {
             gp->state.buttons &= ~XBTN;           // X never reaches the game in burnout
             if (xRising && !macroBusy) {
-                seqSagatLevel1(); startSeq(now, 0, 0);
+                seqSagatLevel1(pinkActive); startSeq(now, 0, 0);
                 if (runSeq(gp, now, toRel(gp->state.dpad))) return true;
             }
         }
@@ -1111,6 +1198,8 @@ void InputMacro::setup() {
     }
 
     buildSagatOptions();
+    buildPinkOptions();
+    profileIdx = 0; pinkActive = false; g_pinkMode = false;
     sagatActive = true;                 // power-up in the built-in Sagat set
     g_sagatMode = true;
     inputMacroOptions = &g_sagatOpts;
@@ -1296,6 +1385,11 @@ void InputMacro::runCurrentMacro() {
     if (isGearMacro(macro) && gearMask[macroPosition] && (buttonMask & ATTACK_MASK)) {
         buttonMask = (buttonMask & ~ATTACK_MASK) | gearMask[macroPosition];
     }
+    if (isSuperMacro(macro) && (buttonMask & ATTACK_MASK)) {   // supers: random light / heavy
+        uint32_t a = buttonMask & ATTACK_MASK;
+        uint32_t nb = (a & KICK_MASK) ? (superLight ? LK : HK) : (superLight ? LP : HP);
+        buttonMask = (buttonMask & ~ATTACK_MASK) | nb;
+    }
 
     // Check if we should still hold this macro input based on duration
     uint64_t elapsed = currentMicros - macroStartTime;
@@ -1358,9 +1452,16 @@ void InputMacro::preprocess()
             V.playing = false; V.win = W_NONE; V.chordPending = false; V.lv2Pending = false; V.delayedAt = 0; V.pendMask = 0;
             V.suppress = 0; V.rawPending = false;
             gearPendingMacro = -1;
-            sagatActive = !sagatActive;
+            profileIdx = (profileIdx + 1) % 3;     // Sagat -> Viper -> pink -> Sagat
+            sagatActive = (profileIdx != 1);
+            pinkActive = (profileIdx == 2);
             g_sagatMode = sagatActive;
-            inputMacroOptions = sagatActive ? &g_sagatOpts : &Storage::getInstance().getAddonOptions().macroOptions;
+            g_pinkMode = pinkActive;
+            cgrab = false;
+            for (int i = 0; i < MAX_MACRO_LIMIT; i++) gearMask[i] = 0;
+            inputMacroOptions = (profileIdx == 0) ? &g_sagatOpts
+                              : (profileIdx == 1) ? &Storage::getInstance().getAddonOptions().macroOptions
+                              : &g_pinkOpts;
             macrosOn = true;
             detectViperMode(inputMacroOptions);
             prevMacroInputPressed = true;    // the Macro 1 press used for the switch never fires
@@ -1399,6 +1500,13 @@ void InputMacro::preprocess()
             return;
         }
         if (V.superCancel) { V.superCancel = false; prevMacroInputPressed = false; }   // super fires now
+    }
+    if (pinkActive) {
+        if (pinkProcess(gamepad, now, macroPinMasks[0], macroPinMasks[1], macroPinMasks[4], macroPinMasks[5], isMacroRunning)) {
+            prevMacroInputPressed = true;
+            return;
+        }
+        gamepad->state.buttons &= ~V.suppress;   // gear-choice punch stays hidden until released
     }
     if (sagatActive) {
         if (sagatProcess(gamepad, now, turboPinMask, isMacroRunning)) {
@@ -1458,8 +1566,10 @@ void InputMacro::preprocess()
         return;
     }
 
-    // CUSTOM: tell the LEDs which button the gear is on (Sagat mode)
-    if (sagatActive) {
+    // CUSTOM: tell the LEDs which button the gear is on (Sagat / pink mode)
+    if (pinkActive) {
+        g_sagatGearMask = pinkGear;
+    } else if (sagatActive) {
         uint32_t gm = 0;
         for (int i = 0; i < MAX_MACRO_LIMIT && !gm; i++) {
             const Macro& mc = inputMacroOptions->macroList[i];
