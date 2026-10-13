@@ -1049,18 +1049,17 @@ namespace {
         return r;
     }
     bool pinkHKHold = false;
+    bool pinkHoldAfter = false;
     void seqPinkGear(int side, uint8_t physRel) {   // side +1 = right version, -1 = left version
         vClear();
         auto ar = [](){ return randomRange(F10(12), F10(22)); };
-        if (pinkGear == LK) {                   // LK, or LK+MK (OD) while holding ↙ / ↘
-            bool od = (physRel & RD) && (physRel & (RF | RB));
-            vPush(physRel, od ? (LK | MK) : LK, vBtn());
-            return;
-        }
-        if (pinkGear == MK) {                   // ↓, N, ↓ + MK
+        if (pinkGear & KICK_MASK) {             // ↓, N, ↓ + kick (LK: OD with LK+MK while holding ↙ / ↘)
+            uint32_t k = pinkGear;
+            if (k == LK && (physRel & RD) && (physRel & (RF | RB))) k = LK | MK;
             vPush(D_, 0, randomRange(F10(13), F10(24)));
-            vPush(N_, 0, randomRange(F10(8), F10(12)));
-            vPush(D_, MK, randomRange(F10(20), F10(40)));
+            vPush(N_, 0, randomRange(F10(10), F10(20)));
+            vPush(D_, k, randomRange(F10(20), F10(40)));
+            pinkHoldAfter = (pinkGear == HK);   // HK: keep holding HK afterwards
             return;
         }
         if (pinkGear == HP) {                   // ↓ + HP twice
@@ -1102,6 +1101,7 @@ namespace {
             }
             if (runSeq(gp, now, toRel(gp->state.dpad))) return true;
             cgrab = false;
+            if (pinkHoldAfter) { pinkHoldAfter = false; pinkHKHold = true; gp->state.buttons |= HK; return true; }
         }
         if (!rise || macroBusy) return false;
         if (rise & (m1 | m2)) {
@@ -1111,7 +1111,7 @@ namespace {
                 V.suppress |= held;
                 return false;
             }
-            if (pinkGear == HK) { pinkHKHold = true; gp->state.buttons |= HK; return true; }
+            pinkHoldAfter = false;
             seqPinkGear((rise & m1) ? +1 : -1, prel);
             startSeq(now, 0, 0); cgrab = false;
             return runSeq(gp, now, toRel(gp->state.dpad));
@@ -1475,7 +1475,7 @@ void InputMacro::preprocess()
             pinkActive = (profileIdx == 2);
             g_sagatMode = sagatActive;
             g_pinkMode = pinkActive;
-            cgrab = false; pinkHKHold = false;
+            cgrab = false; pinkHKHold = false; pinkHoldAfter = false;
             for (int i = 0; i < MAX_MACRO_LIMIT; i++) gearMask[i] = 0;
             inputMacroOptions = (profileIdx == 0) ? &g_sagatOpts
                               : (profileIdx == 1) ? &Storage::getInstance().getAddonOptions().macroOptions
