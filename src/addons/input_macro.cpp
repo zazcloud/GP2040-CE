@@ -1048,9 +1048,21 @@ namespace {
         if (horiz) r |= ((horiz > 0) == V.facingRight) ? F_ : B_;
         return r;
     }
-    void seqPinkGear(int side) {                // side +1 = right version, -1 = left version
+    bool pinkHKHold = false;
+    void seqPinkGear(int side, uint8_t physRel) {   // side +1 = right version, -1 = left version
         vClear();
         auto ar = [](){ return randomRange(F10(12), F10(22)); };
+        if (pinkGear == LK) {                   // LK, or LK+MK (OD) while holding ↙ / ↘
+            bool od = (physRel & RD) && (physRel & (RF | RB));
+            vPush(physRel, od ? (LK | MK) : LK, vBtn());
+            return;
+        }
+        if (pinkGear == MK) {                   // ↓, N, ↓ + MK
+            vPush(D_, 0, randomRange(F10(13), F10(24)));
+            vPush(N_, 0, randomRange(F10(8), F10(12)));
+            vPush(D_, MK, randomRange(F10(20), F10(40)));
+            return;
+        }
         if (pinkGear == HP) {                   // ↓ + HP twice
             vPush(D_, HP, randomRange(F10(30), F10(50)));
             vPush(D_, 0, randomRange(F10(100), F10(150)));
@@ -1061,11 +1073,11 @@ namespace {
         vPush(absDir(true, side), 0, ar());
         vPush(absDir(false, side), pinkGear == MP ? (LK | MK) : LK, vBtn());
     }
-    void seqCommandGrab(uint32_t punch) {       // → ↘ ↙ ← ↙ ↘ → + punch (works on both sides)
+    void seqCommandGrab(uint32_t punch) {       // ↘ ↓ ↙ ← ↙ ↘ → + punch (works on both sides)
         vClear();
         auto ar = [](){ return randomRange(F10(12), F10(20)); };
-        vPush(absDir(false, +1), 0, ar());
         vPush(absDir(true, +1), 0, ar());
+        vPush(absDir(true, 0), 0, ar());
         vPush(absDir(true, -1), 0, ar());
         vPush(absDir(false, -1), 0, ar());
         vPush(absDir(true, -1), 0, ar());
@@ -1078,6 +1090,11 @@ namespace {
         prevPinkPins = pins;
         uint32_t phys = gp->state.buttons;
         V.suppress &= phys;                     // released buttons are no longer hidden
+        uint8_t prel = toRel(gp->state.dpad);
+        if (pinkHKHold) {                       // HK gear: hold HK until a punch or ↓
+            if ((phys & PUNCH_MASK) || (prel & RD) || rise) pinkHKHold = false;
+            else { gp->state.buttons |= HK; return true; }
+        }
         if (V.playing) {
             if (cgrab) {
                 if ((phys & HP) && !(V.suppress & HP)) { cgrabOD = true; V.suppress |= HP; }
@@ -1090,11 +1107,12 @@ namespace {
         if (rise & (m1 | m2)) {
             uint32_t held = phys & ATTACK_MASK;
             if (held) {                         // punch held + gear button = choose the gear (punches only)
-                if (popcount32(held) == 1 && (held & PUNCH_MASK)) pinkGear = held;
+                if (popcount32(held) == 1) pinkGear = held;   // any punch or kick
                 V.suppress |= held;
                 return false;
             }
-            seqPinkGear((rise & m1) ? +1 : -1);
+            if (pinkGear == HK) { pinkHKHold = true; gp->state.buttons |= HK; return true; }
+            seqPinkGear((rise & m1) ? +1 : -1, prel);
             startSeq(now, 0, 0); cgrab = false;
             return runSeq(gp, now, toRel(gp->state.dpad));
         }
@@ -1457,7 +1475,7 @@ void InputMacro::preprocess()
             pinkActive = (profileIdx == 2);
             g_sagatMode = sagatActive;
             g_pinkMode = pinkActive;
-            cgrab = false;
+            cgrab = false; pinkHKHold = false;
             for (int i = 0; i < MAX_MACRO_LIMIT; i++) gearMask[i] = 0;
             inputMacroOptions = (profileIdx == 0) ? &g_sagatOpts
                               : (profileIdx == 1) ? &Storage::getInstance().getAddonOptions().macroOptions
