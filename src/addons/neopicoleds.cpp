@@ -643,7 +643,7 @@ void NeoPicoLEDAddon::process() {
     if (g_sagatMode && !g_viperActive) {
         float bx = as.GetBrightnessX() * 0.5f;
         LEDFormat fmt = neopico.GetFormat();
-        uint32_t base  = (g_sagatBurnout ? (g_pinkMode ? RGB(150, 0, 255) : RGB(255, 120, 0)) : g_pinkMode ? RGB(255, 140, 200) : RGB(255, 235, 140)).value(fmt, bx);
+        uint32_t base  = (g_sagatBurnout ? (g_pinkMode ? RGB(150, 0, 255) : RGB(255, 120, 0)) : g_pinkMode ? RGB(255, 60, 160) : RGB(255, 235, 140)).value(fmt, bx);
         uint32_t red   = RGB(255, 0, 0).value(fmt, bx);
         uint32_t white = RGB(255, 255, 255).value(fmt, bx);
         uint32_t sideMask = g_viperFacingRight ? GAMEPAD_MASK_DL : GAMEPAD_MASK_DR;

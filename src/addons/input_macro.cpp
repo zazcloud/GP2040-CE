@@ -1072,16 +1072,13 @@ namespace {
         vPush(absDir(true, side), 0, ar());
         vPush(absDir(false, side), pinkGear == MP ? (LK | MK) : LK, vBtn());
     }
-    void seqCommandGrab(uint32_t punch) {       // ↘ ↓ ↙ ← ↙ ↘ → + punch (works on both sides)
+    void seqCommandGrab(uint32_t punch) {       // half-circle back for the current side: → ↘ ↙ ← + punch
         vClear();
         auto ar = [](){ return randomRange(F10(12), F10(20)); };
-        vPush(absDir(true, +1), 0, ar());
-        vPush(absDir(true, 0), 0, ar());
-        vPush(absDir(true, -1), 0, ar());
-        vPush(absDir(false, -1), 0, ar());
-        vPush(absDir(true, -1), 0, ar());
-        vPush(absDir(true, +1), 0, ar());
-        vPush(absDir(false, +1), punch, vBtn());
+        vPush(F_, 0, ar());
+        vPush(DF, 0, ar());
+        vPush(DB, 0, ar());
+        vPush(B_, punch, vBtn());
     }
     bool pinkProcess(Gamepad* gp, uint64_t now, uint32_t m1, uint32_t m2, uint32_t m5, uint32_t m6, bool macroBusy) {
         uint32_t pins = (uint32_t)gp->debouncedGpio & (m1 | m2 | m5 | m6);
