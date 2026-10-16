@@ -1147,13 +1147,13 @@ namespace {
         uint8_t prel = toRel(dpad);
         if (manon && (physRise & PUNCH_MASK) && sawQuarterCircle(now)) lvl3Until = now + 15ULL * FRAME_US;
         if (arjinActive) {                      // Arjin: your ↓ ↓ + HK keeps HK held until ↓ or a punch
-            if (now < arjinBlockUntil) {        // punches ignored until frame 32 from the HK, then sent
+            if (now < arjinBlockUntil) {        // punches ignored until frame 29 from the HK, then sent
                 arjinPending |= physRise & PUNCH_MASK;
                 gp->state.buttons &= ~PUNCH_MASK;
                 if (arjinHKHold && (downRise || rise)) arjinHKHold = false;
                 if (arjinHKHold) gp->state.buttons |= HK;
             } else {
-                if (arjinPending) {             // frame 32: the punch you pressed comes out now
+                if (arjinPending) {             // frame 29: the punch you pressed comes out now
                     arjinHKHold = false;
                     arjinPendOut = arjinPending; arjinPending = 0;
                     arjinPendUntil = now + 3ULL * FRAME_US;
@@ -1164,7 +1164,7 @@ namespace {
                     else gp->state.buttons |= HK;
                 } else if ((physRise & HK) && !V.playing && sawDownDown(now)) {
                     arjinHKHold = true;
-                    arjinBlockUntil = now + 32ULL * FRAME_US;
+                    arjinBlockUntil = now + 29ULL * FRAME_US;
                     arjinPending = 0;
                     gp->state.buttons &= ~PUNCH_MASK;
                 }
