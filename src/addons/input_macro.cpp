@@ -37,6 +37,7 @@ volatile bool g_sagatBurnout     = false;   // Sagat burnout (orange LEDs, X = L
 volatile bool g_pinkMode         = false;   // Manon profile active (pink LEDs)
 volatile int  g_profilePic       = 0;       // screen picture: 0 Sagat, 1 Arjin, 2 Manon, 3 Viper (stored splash), 4 Luke
 volatile bool g_lukeMode         = false;   // Luke profile active (blue LEDs)
+volatile bool g_lilyMode         = false;   // Lily profile active (tiffany LEDs)
 volatile uint32_t g_sagatGearMask = 0;      // attack button of the current gear (red LED)
 
 namespace {
@@ -220,11 +221,17 @@ namespace {
     bool pinkActive = false;        // Manon profile
     bool arjinActive = false;       // Arjin profile
     bool lukeActive = false;        // Luke profile (Sagat set + held punch after qcf/qcb)
-    int  profileIdx = 0;            // 0 = Sagat, 1 = Luke, 2 = Arjin, 3 = Manon, 4 = stored config (Viper)
+    bool lilyActive = false;        // Lily profile (SPD on Macro 1/2, qcb/qcf supers)
+    int  profileIdx = 0;            // 0 Sagat, 1 Luke, 2 Lily, 3 Arjin, 4 Manon, 5 stored config (Viper)
     MacroOptions g_pinkOpts;
     MacroOptions g_arjinOpts;
     MacroOptions g_lukeOpts;
     void buildLukeOptions() { g_lukeOpts = g_sagatOpts; }   // same as Sagat
+    MacroOptions g_lilyOpts;
+    void buildLilyOptions() {
+        g_lilyOpts = g_sagatOpts;
+        for (int i = 0; i < 4; i++) g_lilyOpts.macroList[i].enabled = false;   // SPD + supers run by the Lily engine
+    }
     void buildArjinOptions() {
         g_arjinOpts = g_sagatOpts;      // gear DP right/left from Sagat (punch gears only)
         for (int i = 2; i < 6; i++) g_arjinOpts.macroList[i].enabled = false;   // supers + grabs run by the engine
@@ -1040,11 +1047,12 @@ namespace {
     // ---------------- Sagat mode extras: burnout (turbo button) and X = Level 1
     bool prevTurbo = false;
     bool prevSagatX = false;
-    void seqSagatLevel1(bool kick) {            // qcf qcf + LP/HP (Sagat) or LK/HK (Manon, Arjin), 1.2-2.1f, human error
+    void seqSagatLevel1(bool kick, bool back = false) {   // qcf qcf (qcb qcb for Lily) + LP/HP or LK/HK, 1.2-2.1f, human error
         vClear();
-        for (uint8_t d : {D_, DF, F_, D_, DF}) vPush(d, 0, randomRange(F10(12), F10(21)));
+        uint8_t dg = back ? DB : DF, hz = back ? B_ : F_;
+        for (uint8_t d : {D_, dg, hz, D_, dg}) vPush(d, 0, randomRange(F10(12), F10(21)));
         uint32_t dur = vBtn();
-        vPush(F_, kick ? (coin() ? LK : HK) : (coin() ? LP : HP), dur);
+        vPush(hz, kick ? (coin() ? LK : HK) : (coin() ? LP : HP), dur);
         V.seq[V.seqLen - 1].heCut = humanErrorCut(dur);
     }
 
@@ -1279,6 +1287,54 @@ namespace {
         }
         gp->state.buttons &= ~lukeSuppress;
     }
+    // ---------------- Lily: Macro 1/2 = SPD (← ↙ ↓ → ↗ + LP / HP, follows the side),
+    // a punch held or pressed during it = OD (two punches); Macro 3 = qcb qcb + P, Macro 4 = qcf qcf + P
+    uint32_t prevLilyPins = 0, lilyPunch = 0;
+    bool lilySpd = false, lilyOD = false;
+    uint32_t lilyODBtn(uint32_t extra) {
+        uint32_t other = extra & ~lilyPunch;
+        if (!other) other = (lilyPunch == LP) ? HP : LP;
+        return lilyPunch | lowestBit(other);
+    }
+    bool lilyProcess(Gamepad* gp, uint64_t now, uint32_t m1, uint32_t m2, uint32_t m3, uint32_t m4, bool macroBusy) {
+        uint32_t mask = m1 | m2 | m3 | m4;
+        uint32_t pins = (uint32_t)gp->debouncedGpio & mask;
+        uint32_t rise = pins & ~prevLilyPins;
+        prevLilyPins = pins;
+        uint32_t phys = gp->state.buttons;
+        V.suppress &= phys;                     // released buttons are no longer hidden
+        uint8_t prel = toRel(gp->state.dpad);
+        if (V.playing) {
+            if (lilySpd && !lilyOD && V.seqPos < V.seqLen - 1) {
+                uint32_t p = phys & PUNCH_MASK & ~V.suppress;
+                if (p) { lilyOD = true; V.suppress |= p; V.seq[V.seqLen - 1].btn = lilyODBtn(p); }
+            }
+            if (runSeq(gp, now, prel)) return true;
+            lilySpd = false;
+        }
+        if (!rise || macroBusy) return false;
+        if (rise & (m1 | m2)) {
+            lilyPunch = (rise & m1) ? LP : HP;
+            vClear();
+            auto ar = [](){ return randomRange(F10(12), F10(20)); };
+            vPush(B_, 0, ar()); vPush(DB, 0, ar()); vPush(D_, 0, ar()); vPush(F_, 0, ar());
+            vPush(UF, lilyPunch, vBtn());
+            uint32_t held = phys & PUNCH_MASK;
+            lilyOD = held != 0;
+            if (lilyOD) { V.suppress |= held; V.seq[V.seqLen - 1].btn = lilyODBtn(held); }
+            lilySpd = true;
+            startSeq(now, 0, 0);
+            return runSeq(gp, now, prel);
+        }
+        if (rise & (m3 | m4)) {
+            bool back = (rise & m3) != 0;
+            superArrowsAndFinish({D_, back ? DB : DF, back ? B_ : F_, D_, back ? DB : DF}, back ? B_ : F_, coin() ? LP : HP);
+            lilySpd = false;
+            startSeq(now, 0, 0);
+            return runSeq(gp, now, prel);
+        }
+        return false;
+    }
     // ---------------- X turbo (every profile, burnout off): random 1.2-2.2f on / off
     bool xTurboPrev = false, xTurboOn = true;
     uint64_t xTurboNext = 0;
@@ -1310,7 +1366,7 @@ namespace {
         if (g_sagatBurnout) {
             gp->state.buttons &= ~XBTN;           // X never reaches the game in burnout
             if (xRising && !macroBusy) {
-                seqSagatLevel1(pinkActive || arjinActive); startSeq(now, 0, 0);
+                seqSagatLevel1(pinkActive || arjinActive, lilyActive); startSeq(now, 0, 0);
                 if (runSeq(gp, now, toRel(gp->state.dpad))) return true;
             }
         }
@@ -1389,7 +1445,8 @@ void InputMacro::setup() {
     buildPinkOptions();
     buildArjinOptions();
     buildLukeOptions();
-    profileIdx = 0; pinkActive = false; arjinActive = false; lukeActive = false; g_lukeMode = false; g_pinkMode = false; g_profilePic = 0;
+    buildLilyOptions();
+    profileIdx = 0; pinkActive = false; arjinActive = false; lukeActive = false; g_lukeMode = false; lilyActive = false; g_lilyMode = false; g_pinkMode = false; g_profilePic = 0;
     sagatActive = true;                 // power-up in the built-in Sagat set
     g_sagatMode = true;
     inputMacroOptions = &g_sagatOpts;
@@ -1643,12 +1700,14 @@ void InputMacro::preprocess()
             V.playing = false; V.win = W_NONE; V.chordPending = false; V.lv2Pending = false; V.delayedAt = 0; V.pendMask = 0;
             V.suppress = 0; V.rawPending = false;
             gearPendingMacro = -1;
-            profileIdx = (profileIdx + 1) % 5;     // Sagat -> Luke -> Arjin -> Manon -> Viper -> Sagat
-            sagatActive = (profileIdx != 4);
+            profileIdx = (profileIdx + 1) % 6;     // Sagat -> Luke -> Lily -> Arjin -> Manon -> Viper -> Sagat
+            sagatActive = (profileIdx != 5);
             lukeActive = (profileIdx == 1);
-            arjinActive = (profileIdx == 2);
-            pinkActive = (profileIdx == 3);
-            { static const int pic[5] = {0, 4, 1, 2, 3}; g_profilePic = pic[profileIdx]; }
+            lilyActive = (profileIdx == 2);
+            arjinActive = (profileIdx == 3);
+            pinkActive = (profileIdx == 4);
+            { static const int pic[6] = {0, 4, 5, 1, 2, 3}; g_profilePic = pic[profileIdx]; }
+            g_lilyMode = lilyActive; lilySpd = false; lilyOD = false;
             g_lukeMode = lukeActive; lukeHoldBtn = 0; lukeSuppress = 0; lukeTaken = false;
             g_sagatBurnout = false;
             lvl3Until = 0; arjinHKHold = false; arjinBlockUntil = 0; arjinPendUntil = 0; arjinPending = 0; arjinDownSwallow = false;
@@ -1658,8 +1717,9 @@ void InputMacro::preprocess()
             for (int i = 0; i < MAX_MACRO_LIMIT; i++) gearMask[i] = 0;
             inputMacroOptions = (profileIdx == 0) ? &g_sagatOpts
                               : (profileIdx == 1) ? &g_lukeOpts
-                              : (profileIdx == 2) ? &g_arjinOpts
-                              : (profileIdx == 3) ? &g_pinkOpts
+                              : (profileIdx == 2) ? &g_lilyOpts
+                              : (profileIdx == 3) ? &g_arjinOpts
+                              : (profileIdx == 4) ? &g_pinkOpts
                               : &Storage::getInstance().getAddonOptions().macroOptions;
             macrosOn = true;
             detectViperMode(inputMacroOptions);
@@ -1709,6 +1769,13 @@ void InputMacro::preprocess()
         gamepad->state.buttons &= ~V.suppress;   // gear-choice punch stays hidden until released
     }
     if (lukeActive) lukeProcess(gamepad, now);
+    if (lilyActive) {
+        if (lilyProcess(gamepad, now, macroPinMasks[0], macroPinMasks[1], macroPinMasks[2], macroPinMasks[3], isMacroRunning)) {
+            prevMacroInputPressed = true;
+            return;
+        }
+        gamepad->state.buttons &= ~V.suppress;   // OD punch stays hidden until released
+    }
     if (sagatActive) {
         if (sagatProcess(gamepad, now, turboPinMask, isMacroRunning)) {
             prevMacroInputPressed = true;
