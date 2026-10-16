@@ -1360,7 +1360,8 @@ namespace {
     // ---------------- Cammy: forward jump, then a kick within 6f of the jump = qcb + that kick
     // (another kick within 2f of the first = OD, both kicks); Macro 3 = qcf qcf + P, Macro 4 = qcb qcf + P
     uint32_t prevCammyPins = 0, prevCammyPhys = 0, cammyKick = 0;
-    uint8_t  prevCammyRel = 0;
+    uint8_t  prevCammyAbs = 0;
+    int      cammyJumpDir = 0;                      // +1 jumped ↗, -1 jumped ↖ (absolute, side switch not used)
     uint64_t cammyJumpAt = 0, cammyKickAt = 0;
     bool cammyAir = false;
     bool cammyProcess(Gamepad* gp, uint64_t now, uint32_t m3, uint32_t m4, bool macroBusy) {
@@ -1372,10 +1373,14 @@ namespace {
         prevCammyPhys = phys;
         V.suppress &= phys;
         uint8_t prel = toRel(gp->state.dpad);
-        bool ufNow = (prel & RU) && (prel & RF);
-        bool ufPrev = (prevCammyRel & RU) && (prevCammyRel & RF);
-        if (ufNow && !ufPrev) cammyJumpAt = now;            // the moment you pressed forward jump
-        prevCammyRel = prel;
+        // the moment you pressed a diagonal jump (↗ or ↖), read like the game (SOCD cleaned)
+        uint8_t ad = runSOCDCleaner(Gamepad::resolveSOCDMode(gp->getOptions()), gp->state.dpad);
+        const uint8_t UR = GAMEPAD_MASK_UP | GAMEPAD_MASK_RIGHT, UL = GAMEPAD_MASK_UP | GAMEPAD_MASK_LEFT;
+        bool urNow = (ad & UR) == UR && !(ad & GAMEPAD_MASK_DOWN), ulNow = (ad & UL) == UL && !(ad & GAMEPAD_MASK_DOWN);
+        bool urPrev = (prevCammyAbs & UR) == UR, ulPrev = (prevCammyAbs & UL) == UL;
+        if (urNow && !urPrev) { cammyJumpAt = now; cammyJumpDir = +1; }
+        if (ulNow && !ulPrev) { cammyJumpAt = now; cammyJumpDir = -1; }
+        prevCammyAbs = ad;
         if (V.playing) {
             if (cammyAir) {
                 uint32_t k = physRise & KICK_MASK;
@@ -1394,8 +1399,9 @@ namespace {
             V.suppress |= k;
             vClear();
             auto ar = [](){ return randomRange(F10(12), F10(18)); };
-            vPush(D_, 0, ar()); vPush(DB, 0, ar());
-            vPush(B_, cammyKick, vBtn());
+            int h = -cammyJumpDir;                  // qcb away from the jump: ↗ -> ↓ ↙ ←, ↖ -> ↓ ↘ →
+            vPush(absDir(true, 0), 0, ar()); vPush(absDir(true, h), 0, ar());
+            vPush(absDir(false, h), cammyKick, vBtn());
             cammyAir = true;
             startSeq(now, 0, 0);
             return runSeq(gp, now, prel);
