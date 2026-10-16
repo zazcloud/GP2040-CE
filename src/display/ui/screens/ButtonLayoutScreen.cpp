@@ -1,4 +1,7 @@
 #include "ButtonLayoutScreen.h"
+#include "profile_pics.h"
+#include "storagemanager.h"
+extern volatile int g_profilePic;
 #include "buttonlayouts.h"
 #include "drivermanager.h"
 #include "drivers/ps4/PS4Driver.h"
@@ -260,6 +263,14 @@ void ButtonLayoutScreen::generateHeader() {
 }
 
 void ButtonLayoutScreen::drawScreen() {
+    // CUSTOM: each macro profile shows its own picture the whole time
+    if (g_profilePic >= 0) {
+        const uint8_t* pic = (g_profilePic == 0) ? PIC_SAGAT : (g_profilePic == 1) ? PIC_ARJIN
+                           : (g_profilePic == 2) ? PIC_MANON : (const uint8_t*)Storage::getInstance().getDisplayOptions().splashImage.bytes;
+        getRenderer()->clearScreen();
+        getRenderer()->drawSprite((uint8_t*)pic, 128, 64, 16, 0, 0, 1);
+        return;
+    }
     if (bannerDisplay) {
         getRenderer()->drawRectangle(0, 0, 128, 7, true, true);
     	getRenderer()->drawText(0, 0, statusBar, true);

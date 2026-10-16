@@ -34,7 +34,8 @@ volatile bool g_viperFacingRight = true;   // true = player 1 side (left)
 volatile bool g_viperBurnout     = false;
 volatile bool g_sagatMode        = false;   // built-in Sagat macro set active (LEDs light yellow)
 volatile bool g_sagatBurnout     = false;   // Sagat burnout (orange LEDs, X = Level 1)
-volatile bool g_pinkMode         = false;   // third built-in profile active (pink LEDs)
+volatile bool g_pinkMode         = false;   // Manon profile active (pink LEDs)
+volatile int  g_profilePic       = 0;       // screen picture: 0 Sagat, 1 Arjin, 2 Manon, 3 Viper (stored splash)
 volatile uint32_t g_sagatGearMask = 0;      // attack button of the current gear (red LED)
 
 namespace {
@@ -215,9 +216,15 @@ namespace {
         }
     }
     bool sagatActive = false;       // a built-in profile (Sagat or pink) is active
-    bool pinkActive = false;        // the third profile (command grab character)
-    int  profileIdx = 0;            // 0 = Sagat, 1 = stored config (Viper), 2 = pink
+    bool pinkActive = false;        // Manon profile
+    bool arjinActive = false;       // Arjin profile
+    int  profileIdx = 0;            // 0 = Sagat, 1 = Arjin, 2 = Manon, 3 = stored config (Viper)
     MacroOptions g_pinkOpts;
+    MacroOptions g_arjinOpts;
+    void buildArjinOptions() {
+        g_arjinOpts = g_sagatOpts;      // gear DP right/left from Sagat (punch gears only)
+        for (int i = 2; i < 6; i++) g_arjinOpts.macroList[i].enabled = false;   // supers + grabs run by the engine
+    }
     void buildPinkOptions() {
         g_pinkOpts = g_sagatOpts;
         // Macro 1/2 (gear) and 5/6 (command grab) are run by the pink engine, not as plain macros
@@ -1029,12 +1036,11 @@ namespace {
     // ---------------- Sagat mode extras: burnout (turbo button) and X = Level 1
     bool prevTurbo = false;
     bool prevSagatX = false;
-    void seqSagatLevel1(bool mirror) {          // qcf qcf (qcb qcb if mirrored) + LP or HP, 1.2-2.1f, human error
+    void seqSagatLevel1(bool kick) {            // qcf qcf + LP/HP (Sagat) or LK/HK (Manon, Arjin), 1.2-2.1f, human error
         vClear();
-        uint8_t df = mirror ? DB : DF, f = mirror ? B_ : F_;
-        for (uint8_t d : {D_, df, f, D_, df}) vPush(d, 0, randomRange(F10(12), F10(21)));
+        for (uint8_t d : {D_, DF, F_, D_, DF}) vPush(d, 0, randomRange(F10(12), F10(21)));
         uint32_t dur = vBtn();
-        vPush(f, coin() ? LP : HP, dur);
+        vPush(F_, kick ? (coin() ? LK : HK) : (coin() ? LP : HP), dur);
         V.seq[V.seqLen - 1].heCut = humanErrorCut(dur);
     }
 
@@ -1059,7 +1065,6 @@ namespace {
             vPush(D_, 0, randomRange(F10(13), F10(24)));
             vPush(N_, 0, randomRange(F10(10), F10(20)));
             vPush(D_, k, randomRange(F10(20), F10(40)));
-            pinkHoldAfter = (pinkGear == HK);   // HK: keep holding HK afterwards
             return;
         }
         if (pinkGear == HP) {                   // ↓ + HP twice
@@ -1072,56 +1077,135 @@ namespace {
         vPush(absDir(true, side), 0, ar());
         vPush(absDir(false, side), pinkGear == MP ? (LK | MK) : LK, vBtn());
     }
-    void seqCommandGrab(uint32_t punch) {       // half-circle back for the current side: → ↘ ↙ ← + punch
+    void seqCommandGrab(uint32_t punch, bool holdingFwd) {   // half-circle back: → ↘ ↙ ← + punch
         vClear();
         auto ar = [](){ return randomRange(F10(12), F10(20)); };
-        vPush(F_, 0, ar());
+        if (!holdingFwd) vPush(F_, 0, ar());      // smart start: already holding → = skip it
         vPush(DF, 0, ar());
         vPush(DB, 0, ar());
         vPush(B_, punch, vBtn());
     }
-    bool pinkProcess(Gamepad* gp, uint64_t now, uint32_t m1, uint32_t m2, uint32_t m5, uint32_t m6, bool macroBusy) {
-        uint32_t pins = (uint32_t)gp->debouncedGpio & (m1 | m2 | m5 | m6);
+    // absolute stick history (for Manon's level 3 and Arjin's ↓↓HK)
+    uint8_t  ahDir[16]; uint64_t ahT[16]; int ahHead = 0, ahCount = 0;
+    uint8_t  prevAbs = 0xFF;
+    uint64_t lvl3Until = 0;
+    bool arjinHKHold = false;
+    uint32_t prevPinkPhys = 0;
+    void absPush(uint8_t d, uint64_t t) { ahHead = (ahHead + 1) & 15; ahDir[ahHead] = d; ahT[ahHead] = t; if (ahCount < 16) ahCount++; }
+    bool absGet(int k, uint8_t& d, uint64_t& t) { if (k >= ahCount) return false; int i = (ahHead - k) & 15; d = ahDir[i]; t = ahT[i]; return true; }
+    // your own qcf / qcb (↓ ↘ → or ↓ ↙ ←, a final ↗ / ↖ is fine) just before a punch
+    bool sawQuarterCircle(uint64_t now) {
+        const uint8_t U = GAMEPAD_MASK_UP, Dn = GAMEPAD_MASK_DOWN, Lf = GAMEPAD_MASK_LEFT, Rt = GAMEPAD_MASK_RIGHT;
+        uint8_t d; uint64_t t; int k = 0;
+        if (!absGet(0, d, t)) return false;
+        if (d == 0) { if (now - t > 6ULL * FRAME_US) return false; k = 1; if (!absGet(1, d, t)) return false; }
+        if (d == (U | Rt) || d == (U | Lf)) { k++; if (!absGet(k, d, t)) return false; }
+        uint8_t h = d & (Lf | Rt);
+        if (d != Rt && d != Lf) return false;
+        uint64_t tEnd = now;
+        if (!absGet(k + 1, d, t) || d != (Dn | h)) return false;
+        if (!absGet(k + 2, d, t) || d != Dn) return false;
+        return tEnd - t <= 25ULL * FRAME_US;
+    }
+    // ↓ ↓ (two separate presses within 12f) then HK within 7f of the second ↓
+    bool sawDownDown(uint64_t now) {
+        const uint8_t Dn = GAMEPAD_MASK_DOWN;
+        uint64_t t2 = 0, t1 = 0; uint8_t d; uint64_t t; int k = 0; bool gap = false;
+        for (; absGet(k, d, t); k++) { if (d & Dn) { t2 = t; break; } }
+        if (!t2) return false;
+        // walk back over the rest of this ↓ press, then a non-↓ gap, then the first ↓
+        for (k++; absGet(k, d, t); k++) {
+            if (!(d & Dn)) { gap = true; continue; }
+            if (gap) { t1 = t; uint8_t d2; uint64_t tt; while (absGet(k + 1, d2, tt) && (d2 & Dn)) { t1 = tt; k++; } break; }
+            t2 = t;
+        }
+        if (!t1 || !gap) return false;
+        return (t2 - t1) <= 12ULL * FRAME_US && (now - t2) <= 7ULL * FRAME_US;
+    }
+    void seqLevel3(bool left) {                 // fixed directions: left = qcf qcf, right = qcb qcb (+ LP / HP)
+        int h = left ? +1 : -1;
+        superArrowsAndFinish({absDir(true, 0), absDir(true, h), absDir(false, h), absDir(true, 0), absDir(true, h)},
+                             absDir(false, h), coin() ? LP : HP);
+    }
+    bool pinkProcess(Gamepad* gp, uint64_t now, uint32_t m1, uint32_t m2, uint32_t m3, uint32_t m4,
+                     uint32_t m5, uint32_t m6, bool macroBusy) {
+        bool manon = pinkActive;
+        uint32_t mask = m3 | m4 | m5 | m6 | (manon ? (m1 | m2) : 0);
+        uint32_t pins = (uint32_t)gp->debouncedGpio & mask;
         uint32_t rise = pins & ~prevPinkPins;
         prevPinkPins = pins;
         uint32_t phys = gp->state.buttons;
+        uint32_t physRise = phys & ~prevPinkPhys;
+        prevPinkPhys = phys;
+        uint8_t dpad = gp->state.dpad;
+        if (dpad != prevAbs) { absPush(dpad, now); }
+        bool downRise = (dpad & GAMEPAD_MASK_DOWN) && !(prevAbs != 0xFF && (prevAbs & GAMEPAD_MASK_DOWN));
+        prevAbs = dpad;
         V.suppress &= phys;                     // released buttons are no longer hidden
-        uint8_t prel = toRel(gp->state.dpad);
-        if (pinkHKHold) {                       // HK gear: hold HK until a punch or ↓
-            if ((phys & PUNCH_MASK) || (prel & RD) || rise) pinkHKHold = false;
-            else { gp->state.buttons |= HK; return true; }
+        uint8_t prel = toRel(dpad);
+        if (manon && (physRise & PUNCH_MASK) && sawQuarterCircle(now)) lvl3Until = now + 15ULL * FRAME_US;
+        if (arjinActive) {                      // Arjin: your ↓ ↓ + HK keeps HK held until ↓ or a punch
+            if (arjinHKHold) {
+                if ((physRise & PUNCH_MASK) || downRise || rise) arjinHKHold = false;
+                else gp->state.buttons |= HK;
+            } else if ((physRise & HK) && !V.playing && sawDownDown(now)) {
+                arjinHKHold = true;
+            }
         }
         if (V.playing) {
             if (cgrab) {
                 if ((phys & HP) && !(V.suppress & HP)) { cgrabOD = true; V.suppress |= HP; }
                 if (cgrabOD && V.seqPos < V.seqLen - 1) V.seq[V.seqLen - 1].btn = LP | HP;   // OD window: until the last →
             }
-            if (runSeq(gp, now, toRel(gp->state.dpad))) return true;
+            if (runSeq(gp, now, prel)) return true;
             cgrab = false;
-            if (pinkHoldAfter) { pinkHoldAfter = false; pinkHKHold = true; gp->state.buttons |= HK; return true; }
         }
         if (!rise || macroBusy) return false;
-        if (rise & (m1 | m2)) {
+        if (manon && (rise & (m1 | m2))) {
             uint32_t held = phys & ATTACK_MASK;
-            if (held) {                         // punch held + gear button = choose the gear (punches only)
-                if (popcount32(held) == 1) pinkGear = held;   // any punch or kick
+            if (held) {                         // attack held + gear button = choose the gear (no HK)
+                if (popcount32(held) == 1 && held != HK) pinkGear = held;
                 V.suppress |= held;
                 return false;
             }
-            pinkHoldAfter = false;
             seqPinkGear((rise & m1) ? +1 : -1, prel);
             startSeq(now, 0, 0); cgrab = false;
-            return runSeq(gp, now, toRel(gp->state.dpad));
+            return runSeq(gp, now, prel);
+        }
+        if (rise & (m3 | m4)) {                 // supers
+            if (arjinActive || now < lvl3Until) {
+                seqLevel3((rise & m3) != 0);
+                lvl3Until = 0;
+                startSeq(now, 0, 0); cgrab = false;
+                return runSeq(gp, now, prel);
+            }
+            return false;                       // Manon without the window: normal super macro
         }
         if (rise & (m5 | m6)) {
-            seqCommandGrab((rise & m5) ? LP : HP);
+            seqCommandGrab((rise & m5) ? LP : HP, (prel & RF) && !(prel & RD));
             cgrab = true; cgrabOD = (phys & HP) != 0;
             if (cgrabOD) { V.suppress |= HP; V.seq[V.seqLen - 1].btn = LP | HP; }
             startSeq(now, 0, 0);
-            return runSeq(gp, now, toRel(gp->state.dpad));
+            return runSeq(gp, now, prel);
         }
         return false;
     }
+    // ---------------- X turbo (every profile, burnout off): random 1.2-2.2f on / off
+    bool xTurboPrev = false, xTurboOn = true;
+    uint64_t xTurboNext = 0;
+    void applyXTurbo(Gamepad* gp, uint64_t now, bool physX) {
+        bool burn = viperMode ? V.burnout : g_sagatBurnout;
+        if (!physX || burn || !macrosOn) { xTurboPrev = false; return; }
+        if (!xTurboPrev) { xTurboOn = true; xTurboNext = now + randomRange(F10(12), F10(22)); }
+        else if (now >= xTurboNext) { xTurboOn = !xTurboOn; xTurboNext = now + randomRange(F10(12), F10(22)); }
+        xTurboPrev = true;
+        if (!xTurboOn) gp->state.buttons &= ~XBTN;
+    }
+    struct XTurboGuard {
+        Gamepad* gp; uint64_t now; bool physX;
+        ~XTurboGuard() { applyXTurbo(gp, now, physX); }
+    };
+
     // Returns true when it owns the output this poll.
     bool sagatProcess(Gamepad* gp, uint64_t now, uint32_t turboPin, bool macroBusy) {
         bool tb = turboPin && (gp->debouncedGpio & turboPin);
@@ -1137,7 +1221,7 @@ namespace {
         if (g_sagatBurnout) {
             gp->state.buttons &= ~XBTN;           // X never reaches the game in burnout
             if (xRising && !macroBusy) {
-                seqSagatLevel1(pinkActive); startSeq(now, 0, 0);
+                seqSagatLevel1(pinkActive || arjinActive); startSeq(now, 0, 0);
                 if (runSeq(gp, now, toRel(gp->state.dpad))) return true;
             }
         }
@@ -1214,7 +1298,8 @@ void InputMacro::setup() {
 
     buildSagatOptions();
     buildPinkOptions();
-    profileIdx = 0; pinkActive = false; g_pinkMode = false;
+    buildArjinOptions();
+    profileIdx = 0; pinkActive = false; arjinActive = false; g_pinkMode = false; g_profilePic = 0;
     sagatActive = true;                 // power-up in the built-in Sagat set
     g_sagatMode = true;
     inputMacroOptions = &g_sagatOpts;
@@ -1448,6 +1533,7 @@ void InputMacro::preprocess()
 
     Gamepad * gamepad = Storage::getInstance().GetGamepad();
     uint64_t now = getMicro();
+    XTurboGuard xturbo{gamepad, now, (gamepad->state.buttons & XBTN) != 0};   // applied on every exit
 
     // CUSTOM: pin 20 turns all macros on/off
     {
@@ -1467,16 +1553,21 @@ void InputMacro::preprocess()
             V.playing = false; V.win = W_NONE; V.chordPending = false; V.lv2Pending = false; V.delayedAt = 0; V.pendMask = 0;
             V.suppress = 0; V.rawPending = false;
             gearPendingMacro = -1;
-            profileIdx = (profileIdx + 1) % 3;     // Sagat -> Viper -> pink -> Sagat
-            sagatActive = (profileIdx != 1);
+            profileIdx = (profileIdx + 1) % 4;     // Sagat -> Arjin -> Manon -> Viper -> Sagat
+            sagatActive = (profileIdx != 3);
             pinkActive = (profileIdx == 2);
+            arjinActive = (profileIdx == 1);
+            g_profilePic = profileIdx;
+            g_sagatBurnout = false;
+            lvl3Until = 0; arjinHKHold = false;
             g_sagatMode = sagatActive;
             g_pinkMode = pinkActive;
             cgrab = false; pinkHKHold = false; pinkHoldAfter = false;
             for (int i = 0; i < MAX_MACRO_LIMIT; i++) gearMask[i] = 0;
             inputMacroOptions = (profileIdx == 0) ? &g_sagatOpts
-                              : (profileIdx == 1) ? &Storage::getInstance().getAddonOptions().macroOptions
-                              : &g_pinkOpts;
+                              : (profileIdx == 1) ? &g_arjinOpts
+                              : (profileIdx == 2) ? &g_pinkOpts
+                              : &Storage::getInstance().getAddonOptions().macroOptions;
             macrosOn = true;
             detectViperMode(inputMacroOptions);
             prevMacroInputPressed = true;    // the Macro 1 press used for the switch never fires
@@ -1516,8 +1607,9 @@ void InputMacro::preprocess()
         }
         if (V.superCancel) { V.superCancel = false; prevMacroInputPressed = false; }   // super fires now
     }
-    if (pinkActive) {
-        if (pinkProcess(gamepad, now, macroPinMasks[0], macroPinMasks[1], macroPinMasks[4], macroPinMasks[5], isMacroRunning)) {
+    if (pinkActive || arjinActive) {
+        if (pinkProcess(gamepad, now, macroPinMasks[0], macroPinMasks[1], macroPinMasks[2], macroPinMasks[3],
+                        macroPinMasks[4], macroPinMasks[5], isMacroRunning)) {
             prevMacroInputPressed = true;
             return;
         }
@@ -1571,7 +1663,7 @@ void InputMacro::preprocess()
             isGearMacro(inputMacroOptions->macroList[pressedMacro]) &&
             !inputMacroOptions->macroList[pressedMacro].useMacroTriggerButton) {
         // attack held, then gear button: gear changes right away, for every gear macro
-        if (popcount32(attackHeld) == 1) {
+        if (popcount32(attackHeld) == 1 && !(arjinActive && (attackHeld & KICK_MASK))) {
             for (int i = 0; i < MAX_MACRO_LIMIT; i++)
                 if (isGearMacro(inputMacroOptions->macroList[i])) gearMask[i] = attackHeld;
         }
