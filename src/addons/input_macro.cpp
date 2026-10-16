@@ -38,6 +38,7 @@ volatile bool g_pinkMode         = false;   // Manon profile active (pink LEDs)
 volatile int  g_profilePic       = 0;       // screen picture: 0 Sagat, 1 Arjin, 2 Manon, 3 Viper (stored splash), 4 Luke
 volatile bool g_lukeMode         = false;   // Luke profile active (blue LEDs)
 volatile bool g_lilyMode         = false;   // Lily profile active (tiffany LEDs)
+volatile char g_lukeDbg[24]      = "luke dbg: press P";   // DEBUG line under the Luke picture
 volatile uint32_t g_sagatGearMask = 0;      // attack button of the current gear (red LED)
 
 namespace {
@@ -1123,6 +1124,7 @@ namespace {
         return tEnd - t <= 25ULL * FRAME_US;
     }
     // Luke: ↓ (any length) → ↘/↙ → →/← (a ↗/↖ after it is fine); the punch within 8f of reaching →/←
+    char lukeWhy = '-';
     bool sawQuarterCircleLuke(uint64_t now) {
         // walks back through the stick history; tiny switch flickers (↙ ← ↙ ←, ↓ ↙ ↓ ↙) are tolerated
         const uint8_t U = GAMEPAD_MASK_UP, Dn = GAMEPAD_MASK_DOWN, Lf = GAMEPAD_MASK_LEFT, Rt = GAMEPAD_MASK_RIGHT;
@@ -1132,14 +1134,14 @@ namespace {
             if (!h) {                                    // after the forward: neutral / ↗ / ↖ allowed
                 if (d == Rt || d == Lf) { h = d; tH = t; continue; }
                 if (d == 0 || d == (U | Rt) || d == (U | Lf)) continue;
-                return false;
+                lukeWhy = 'A'; return false;
             }
             if (d == h) { if (!diag) tH = t; continue; }  // first time you reached →/←
             if (d == (Dn | h)) { diag = true; continue; }
-            if (d == Dn && diag) return now - tH <= 8ULL * FRAME_US;
-            return false;
+            if (d == Dn && diag) { bool ok = now - tH <= 8ULL * FRAME_US; lukeWhy = ok ? 'O' : 'W'; return ok; }
+            lukeWhy = 'B'; return false;
         }
-        return false;
+        lukeWhy = 'E'; return false;
     }
     // ↓ ↓ (two separate presses within 12f) then HK within 7f of the second ↓
     bool sawDownDown(uint64_t now) {
@@ -1278,7 +1280,22 @@ namespace {
                 else { lukeSuppress |= phys & lukeHoldBtn; lukeHoldBtn = 0; lukeTaken = false; }
             }
         }
-        if (!lukeHoldBtn && (rise & PUNCH_MASK) && !V.playing && sawQuarterCircleLuke(now)) {
+        if (rise & PUNCH_MASK) {                // DEBUG: last 6 stick states (hex, oldest first), result, macro-playing flag
+            static const char hx[] = "0123456789ABCDEF";
+            static uint8_t presses = 0, hits = 0;
+            presses++;
+            bool ok = !lukeHoldBtn && sawQuarterCircleLuke(now);
+            if (ok) hits++;
+            char* o = (char*)g_lukeDbg; int n = 0;
+            for (int i = 5; i >= 0; i--) { uint8_t d; uint64_t t; o[n++] = absGet(i, d, t) ? hx[d & 15] : '.'; }
+            o[n++] = ' '; o[n++] = lukeHoldBtn ? 'H' : lukeWhy;
+            o[n++] = ' '; o[n++] = 'V'; o[n++] = V.playing ? '1' : '0';
+            o[n++] = ' '; o[n++] = 'P'; o[n++] = hx[presses % 10];
+            o[n++] = ' '; o[n++] = 'M'; o[n++] = hx[hits % 10];
+            o[n] = 0;
+            lukeWhy = '-';
+        }
+        if (!lukeHoldBtn && (rise & PUNCH_MASK) && sawQuarterCircleLuke(now)) {
             lukeHoldBtn = rise & PUNCH_MASK;
             lukeStart = now;
             lukeEnd = now + randomRange(F10(182), F10(198));
