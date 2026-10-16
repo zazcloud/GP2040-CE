@@ -25,6 +25,7 @@ extern volatile bool g_sagatBurnout;
 extern volatile bool g_pinkMode;
 extern volatile bool g_lukeMode;
 extern volatile bool g_lilyMode;
+extern volatile bool g_cammyMode;
 extern volatile uint32_t g_sagatGearMask;
 
 // CUSTOM: the LED under each physical button follows the board's original wiring
@@ -646,8 +647,8 @@ void NeoPicoLEDAddon::process() {
         float bx = as.GetBrightnessX() * 0.25f;  // 50% dimmer than before
         LEDFormat fmt = neopico.GetFormat();
         RGB baseRgb = g_sagatBurnout
-            ? (g_pinkMode ? RGB(150, 0, 255) : g_lukeMode ? RGB(0, 30, 255) : g_lilyMode ? RGB(0, 95, 90) : RGB(255, 120, 0))      // Luke burnout dark blue, Lily darker tiffany
-            : (g_pinkMode ? RGB(255, 60, 160) : g_lukeMode ? RGB(90, 200, 255) : g_lilyMode ? RGB(10, 186, 181) : RGB(255, 235, 140)); // Luke light blue, Lily tiffany
+            ? (g_pinkMode ? RGB(150, 0, 255) : g_lukeMode ? RGB(0, 30, 255) : g_lilyMode ? RGB(0, 95, 90) : g_cammyMode ? RGB(0, 80, 110) : RGB(255, 120, 0))      // Luke burnout dark blue, Lily darker tiffany
+            : (g_pinkMode ? RGB(255, 60, 160) : g_lukeMode ? RGB(90, 200, 255) : g_lilyMode ? RGB(10, 186, 181) : g_cammyMode ? RGB(0, 255, 255) : RGB(255, 235, 140)); // Luke light blue, Lily tiffany
         uint32_t base  = baseRgb.value(fmt, bx);
         uint32_t red   = RGB(255, 0, 0).value(fmt, bx);
         uint32_t white = RGB(255, 255, 255).value(fmt, bx);
