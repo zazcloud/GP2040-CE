@@ -2,6 +2,9 @@
 
 #include "pico/stdlib.h"
 #include "drivermanager.h"
+#include "profile_pics.h"
+
+extern volatile int g_profilePic;
 
 void SplashScreen::init() {
     getRenderer()->clearScreen();
@@ -17,8 +20,16 @@ void SplashScreen::drawScreen() {
 	if (getDisplayOptions().splashMode == static_cast<SplashMode>(SPLASH_MODE_NONE)) {
 		getRenderer()->drawText(0, 4, " Splash NOT enabled.");
     } else {
-            // Default, display static or custom image
-            getRenderer()->drawSprite((uint8_t*) getDisplayOptions().splashImage.bytes, 128, 64, 16, 0, 0, 1);
+            // CUSTOM: show the current macro profile's picture (Viper = stored splash)
+            const uint8_t* pic = nullptr;
+            if (!configMode) {
+                if (g_profilePic == 0) pic = PIC_SAGAT;
+                else if (g_profilePic == 1) pic = PIC_ARJIN;
+                else if (g_profilePic == 2) pic = PIC_MANON;
+            }
+            getRenderer()->clearScreen();
+            if (pic) getRenderer()->drawSprite((uint8_t*) pic, 128, 64, 16, 0, 0, 1);
+            else getRenderer()->drawSprite((uint8_t*) getDisplayOptions().splashImage.bytes, 128, 64, 16, 0, 0, 1);
 	}
 }
 
