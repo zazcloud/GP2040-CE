@@ -1090,7 +1090,8 @@ namespace {
     uint8_t  prevAbs = 0xFF;
     uint64_t lvl3Until = 0;
     bool arjinHKHold = false;
-    uint64_t arjinBlockUntil = 0, arjinPendUntil = 0;
+    uint64_t arjinBlockUntil = 0, arjinPendUntil = 0, arjinHKStart = 0;
+    bool arjinDownSwallow = false, arjinDownPass = false;
     uint32_t arjinPending = 0, arjinPendOut = 0;
     uint32_t prevPinkPhys = 0;
     void absPush(uint8_t d, uint64_t t) { ahHead = (ahHead + 1) & 15; ahDir[ahHead] = d; ahT[ahHead] = t; if (ahCount < 16) ahCount++; }
@@ -1147,10 +1148,22 @@ namespace {
         uint8_t prel = toRel(dpad);
         if (manon && (physRise & PUNCH_MASK) && sawQuarterCircle(now)) lvl3Until = now + 15ULL * FRAME_US;
         if (arjinActive) {                      // Arjin: your ↓ ↓ + HK keeps HK held until ↓ or a punch
+            // ↓ before frame 18 from the HK: ignored (not sent, does not stop the hold) until you let go of it
+            if (arjinHKHold) {
+                bool dn = (dpad & GAMEPAD_MASK_DOWN) != 0;
+                if (arjinDownPass && !dn) arjinDownPass = false;   // the ↓ of your motion passes until released
+                if (now < arjinHKStart + 18ULL * FRAME_US) { if (dn && !arjinDownPass) arjinDownSwallow = true; }
+                else if (downRise && !arjinDownSwallow) arjinHKHold = false;   // a fresh ↓ after 18f stops it
+                if (!dn) arjinDownSwallow = false;
+                if (arjinHKHold && arjinDownSwallow) gp->state.dpad &= ~GAMEPAD_MASK_DOWN;
+                if (arjinHKHold && rise) arjinHKHold = false;
+            } else if (arjinDownSwallow) {
+                if (dpad & GAMEPAD_MASK_DOWN) gp->state.dpad &= ~GAMEPAD_MASK_DOWN;
+                else arjinDownSwallow = false;
+            }
             if (now < arjinBlockUntil) {        // punches ignored until frame 29 from the HK, then sent
                 arjinPending |= physRise & PUNCH_MASK;
                 gp->state.buttons &= ~PUNCH_MASK;
-                if (arjinHKHold && (downRise || rise)) arjinHKHold = false;
                 if (arjinHKHold) gp->state.buttons |= HK;
             } else {
                 if (arjinPending) {             // frame 29: the punch you pressed comes out now
@@ -1160,10 +1173,13 @@ namespace {
                 }
                 if (now < arjinPendUntil) gp->state.buttons |= arjinPendOut;
                 if (arjinHKHold) {
-                    if ((physRise & PUNCH_MASK) || downRise || rise) arjinHKHold = false;
+                    if (physRise & PUNCH_MASK) arjinHKHold = false;
                     else gp->state.buttons |= HK;
                 } else if ((physRise & HK) && !V.playing && sawDownDown(now)) {
                     arjinHKHold = true;
+                    arjinHKStart = now;
+                    arjinDownSwallow = false;
+                    arjinDownPass = (dpad & GAMEPAD_MASK_DOWN) != 0;
                     arjinBlockUntil = now + 29ULL * FRAME_US;
                     arjinPending = 0;
                     gp->state.buttons &= ~PUNCH_MASK;
@@ -1577,7 +1593,7 @@ void InputMacro::preprocess()
             arjinActive = (profileIdx == 1);
             g_profilePic = profileIdx;
             g_sagatBurnout = false;
-            lvl3Until = 0; arjinHKHold = false; arjinBlockUntil = 0; arjinPendUntil = 0; arjinPending = 0;
+            lvl3Until = 0; arjinHKHold = false; arjinBlockUntil = 0; arjinPendUntil = 0; arjinPending = 0; arjinDownSwallow = false;
             g_sagatMode = sagatActive;
             g_pinkMode = pinkActive;
             cgrab = false; pinkHKHold = false; pinkHoldAfter = false;
