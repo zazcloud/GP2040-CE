@@ -1090,6 +1090,7 @@ namespace {
     uint8_t  prevAbs = 0xFF;
     uint64_t lvl3Until = 0;
     bool arjinHKHold = false;
+    uint64_t arjinHKTail = 0;
     uint32_t prevPinkPhys = 0;
     void absPush(uint8_t d, uint64_t t) { ahHead = (ahHead + 1) & 15; ahDir[ahHead] = d; ahT[ahHead] = t; if (ahCount < 16) ahCount++; }
     bool absGet(int k, uint8_t& d, uint64_t& t) { if (k >= ahCount) return false; int i = (ahHead - k) & 15; d = ahDir[i]; t = ahT[i]; return true; }
@@ -1146,8 +1147,11 @@ namespace {
         if (manon && (physRise & PUNCH_MASK) && sawQuarterCircle(now)) lvl3Until = now + 15ULL * FRAME_US;
         if (arjinActive) {                      // Arjin: your ↓ ↓ + HK keeps HK held until ↓ or a punch
             if (arjinHKHold) {
-                if ((physRise & PUNCH_MASK) || downRise || rise) arjinHKHold = false;
-                else gp->state.buttons |= HK;
+                if (physRise & PUNCH_MASK) { arjinHKHold = false; arjinHKTail = now + 3ULL * FRAME_US; }
+                else if (downRise || rise) arjinHKHold = false;
+                if (arjinHKHold || now < arjinHKTail) gp->state.buttons |= HK;   // punch goes out now, HK stays 3f under it
+            } else if (now < arjinHKTail) {
+                gp->state.buttons |= HK;
             } else if ((physRise & HK) && !V.playing && sawDownDown(now)) {
                 arjinHKHold = true;
             }
@@ -1559,7 +1563,7 @@ void InputMacro::preprocess()
             arjinActive = (profileIdx == 1);
             g_profilePic = profileIdx;
             g_sagatBurnout = false;
-            lvl3Until = 0; arjinHKHold = false;
+            lvl3Until = 0; arjinHKHold = false; arjinHKTail = 0;
             g_sagatMode = sagatActive;
             g_pinkMode = pinkActive;
             cgrab = false; pinkHKHold = false; pinkHoldAfter = false;
