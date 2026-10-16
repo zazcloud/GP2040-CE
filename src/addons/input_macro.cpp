@@ -1263,7 +1263,8 @@ namespace {
     uint64_t lukeStart = 0, lukeEnd = 0;
     bool lukeTaken = false;
     void lukeProcess(Gamepad* gp, uint64_t now) {
-        uint8_t dpad = gp->state.dpad;
+        // the stick as the game sees it (SOCD cleaned: e.g. ↓ held + ↑ pressed = no vertical -> ←)
+        uint8_t dpad = runSOCDCleaner(Gamepad::resolveSOCDMode(gp->getOptions()), gp->state.dpad);
         if (dpad != prevAbs) absPush(dpad, now);
         prevAbs = dpad;
         uint32_t phys = gp->state.buttons;
