@@ -35,7 +35,8 @@ volatile bool g_viperBurnout     = false;
 volatile bool g_sagatMode        = false;   // built-in Sagat macro set active (LEDs light yellow)
 volatile bool g_sagatBurnout     = false;   // Sagat burnout (orange LEDs, X = Level 1)
 volatile bool g_pinkMode         = false;   // Manon profile active (pink LEDs)
-volatile int  g_profilePic       = 0;       // screen picture: 0 Sagat, 1 Arjin, 2 Manon, 3 Viper (stored splash)
+volatile int  g_profilePic       = 0;       // screen picture: 0 Sagat, 1 Arjin, 2 Manon, 3 Viper (stored splash), 4 Luke
+volatile bool g_lukeMode         = false;   // Luke profile active (blue LEDs)
 volatile uint32_t g_sagatGearMask = 0;      // attack button of the current gear (red LED)
 
 namespace {
@@ -218,9 +219,12 @@ namespace {
     bool sagatActive = false;       // a built-in profile (Sagat or pink) is active
     bool pinkActive = false;        // Manon profile
     bool arjinActive = false;       // Arjin profile
-    int  profileIdx = 0;            // 0 = Sagat, 1 = Arjin, 2 = Manon, 3 = stored config (Viper)
+    bool lukeActive = false;        // Luke profile (Sagat set + held punch after qcf/qcb)
+    int  profileIdx = 0;            // 0 = Sagat, 1 = Luke, 2 = Arjin, 3 = Manon, 4 = stored config (Viper)
     MacroOptions g_pinkOpts;
     MacroOptions g_arjinOpts;
+    MacroOptions g_lukeOpts;
+    void buildLukeOptions() { g_lukeOpts = g_sagatOpts; }   // same as Sagat
     void buildArjinOptions() {
         g_arjinOpts = g_sagatOpts;      // gear DP right/left from Sagat (punch gears only)
         for (int i = 2; i < 6; i++) g_arjinOpts.macroList[i].enabled = false;   // supers + grabs run by the engine
@@ -1224,6 +1228,31 @@ namespace {
         }
         return false;
     }
+    // ---------------- Luke: your qcf / qcb + LP/MP/HP holds that punch, released at 18.2-20f
+    // from its first frame (even if you let go earlier); other attacks are ignored meanwhile
+    uint32_t lukeHoldBtn = 0, lukeSuppress = 0, prevLukePhys = 0;
+    uint64_t lukeEnd = 0;
+    void lukeProcess(Gamepad* gp, uint64_t now) {
+        uint8_t dpad = gp->state.dpad;
+        if (dpad != prevAbs) absPush(dpad, now);
+        prevAbs = dpad;
+        uint32_t phys = gp->state.buttons;
+        uint32_t rise = phys & ~prevLukePhys;
+        prevLukePhys = phys;
+        lukeSuppress &= phys;                   // let go = usable again
+        if (lukeHoldBtn) {
+            if (now < lukeEnd) { gp->state.buttons = (phys & ~ATTACK_MASK) | lukeHoldBtn; return; }
+            lukeHoldBtn = 0;
+            lukeSuppress |= phys & ATTACK_MASK;  // still held at the release: stays off until you let go
+        } else if ((rise & PUNCH_MASK) && !V.playing && sawQuarterCircle(now)) {
+            lukeHoldBtn = rise & PUNCH_MASK;
+            lukeEnd = now + randomRange(F10(182), F10(200));
+            lukeSuppress = 0;
+            gp->state.buttons = (phys & ~ATTACK_MASK) | lukeHoldBtn;
+            return;
+        }
+        gp->state.buttons &= ~lukeSuppress;
+    }
     // ---------------- X turbo (every profile, burnout off): random 1.2-2.2f on / off
     bool xTurboPrev = false, xTurboOn = true;
     uint64_t xTurboNext = 0;
@@ -1333,7 +1362,8 @@ void InputMacro::setup() {
     buildSagatOptions();
     buildPinkOptions();
     buildArjinOptions();
-    profileIdx = 0; pinkActive = false; arjinActive = false; g_pinkMode = false; g_profilePic = 0;
+    buildLukeOptions();
+    profileIdx = 0; pinkActive = false; arjinActive = false; lukeActive = false; g_lukeMode = false; g_pinkMode = false; g_profilePic = 0;
     sagatActive = true;                 // power-up in the built-in Sagat set
     g_sagatMode = true;
     inputMacroOptions = &g_sagatOpts;
@@ -1587,11 +1617,13 @@ void InputMacro::preprocess()
             V.playing = false; V.win = W_NONE; V.chordPending = false; V.lv2Pending = false; V.delayedAt = 0; V.pendMask = 0;
             V.suppress = 0; V.rawPending = false;
             gearPendingMacro = -1;
-            profileIdx = (profileIdx + 1) % 4;     // Sagat -> Arjin -> Manon -> Viper -> Sagat
-            sagatActive = (profileIdx != 3);
-            pinkActive = (profileIdx == 2);
-            arjinActive = (profileIdx == 1);
-            g_profilePic = profileIdx;
+            profileIdx = (profileIdx + 1) % 5;     // Sagat -> Luke -> Arjin -> Manon -> Viper -> Sagat
+            sagatActive = (profileIdx != 4);
+            lukeActive = (profileIdx == 1);
+            arjinActive = (profileIdx == 2);
+            pinkActive = (profileIdx == 3);
+            { static const int pic[5] = {0, 4, 1, 2, 3}; g_profilePic = pic[profileIdx]; }
+            g_lukeMode = lukeActive; lukeHoldBtn = 0; lukeSuppress = 0;
             g_sagatBurnout = false;
             lvl3Until = 0; arjinHKHold = false; arjinBlockUntil = 0; arjinPendUntil = 0; arjinPending = 0; arjinDownSwallow = false;
             g_sagatMode = sagatActive;
@@ -1599,8 +1631,9 @@ void InputMacro::preprocess()
             cgrab = false; pinkHKHold = false; pinkHoldAfter = false;
             for (int i = 0; i < MAX_MACRO_LIMIT; i++) gearMask[i] = 0;
             inputMacroOptions = (profileIdx == 0) ? &g_sagatOpts
-                              : (profileIdx == 1) ? &g_arjinOpts
-                              : (profileIdx == 2) ? &g_pinkOpts
+                              : (profileIdx == 1) ? &g_lukeOpts
+                              : (profileIdx == 2) ? &g_arjinOpts
+                              : (profileIdx == 3) ? &g_pinkOpts
                               : &Storage::getInstance().getAddonOptions().macroOptions;
             macrosOn = true;
             detectViperMode(inputMacroOptions);
@@ -1649,6 +1682,7 @@ void InputMacro::preprocess()
         }
         gamepad->state.buttons &= ~V.suppress;   // gear-choice punch stays hidden until released
     }
+    if (lukeActive) lukeProcess(gamepad, now);
     if (sagatActive) {
         if (sagatProcess(gamepad, now, turboPinMask, isMacroRunning)) {
             prevMacroInputPressed = true;

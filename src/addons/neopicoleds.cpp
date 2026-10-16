@@ -23,6 +23,7 @@ extern volatile bool g_viperBurnout;
 extern volatile bool g_sagatMode;
 extern volatile bool g_sagatBurnout;
 extern volatile bool g_pinkMode;
+extern volatile bool g_lukeMode;
 extern volatile uint32_t g_sagatGearMask;
 
 // CUSTOM: the LED under each physical button follows the board's original wiring
@@ -615,7 +616,7 @@ void NeoPicoLEDAddon::process() {
 
     // CUSTOM: Viper mode colors - green (red in burnout), side arrow + pressed = white
     if (g_viperActive) {
-        float bx = as.GetBrightnessX();
+        float bx = as.GetBrightnessX() * 0.5f;   // 50% dimmer
         LEDFormat fmt = neopico.GetFormat();
         uint32_t base  = (g_viperBurnout ? RGB(255, 0, 0) : RGB(0, 255, 0)).value(fmt, bx);
         uint32_t white = RGB(255, 255, 255).value(fmt, bx);
@@ -641,9 +642,12 @@ void NeoPicoLEDAddon::process() {
     // CUSTOM: Sagat mode colors (half brightness): light yellow (orange in burnout),
     // gear button red, side arrow white
     if (g_sagatMode && !g_viperActive) {
-        float bx = as.GetBrightnessX() * 0.5f;
+        float bx = as.GetBrightnessX() * 0.25f;  // 50% dimmer than before
         LEDFormat fmt = neopico.GetFormat();
-        uint32_t base  = (g_sagatBurnout ? (g_pinkMode ? RGB(150, 0, 255) : RGB(255, 120, 0)) : g_pinkMode ? RGB(255, 60, 160) : RGB(255, 235, 140)).value(fmt, bx);
+        RGB baseRgb = g_sagatBurnout
+            ? (g_pinkMode ? RGB(150, 0, 255) : g_lukeMode ? RGB(0, 30, 255) : RGB(255, 120, 0))      // Luke burnout: dark blue
+            : (g_pinkMode ? RGB(255, 60, 160) : g_lukeMode ? RGB(90, 200, 255) : RGB(255, 235, 140)); // Luke: light blue
+        uint32_t base  = baseRgb.value(fmt, bx);
         uint32_t red   = RGB(255, 0, 0).value(fmt, bx);
         uint32_t white = RGB(255, 255, 255).value(fmt, bx);
         uint32_t sideMask = g_viperFacingRight ? GAMEPAD_MASK_DL : GAMEPAD_MASK_DR;
