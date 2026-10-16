@@ -1114,19 +1114,19 @@ namespace {
         if (!absGet(k + 2, d, t) || d != Dn) return false;
         return tEnd - t <= 25ULL * FRAME_US;
     }
-    // Luke: same motion, but holding ↓ as long as you like is fine; ↙/↘ to the punch within 20f
+    // Luke: ↓ (any length) → ↘/↙ → →/← (a ↗/↖ after it is fine); the punch within 8f of reaching →/←
     bool sawQuarterCircleLuke(uint64_t now) {
         const uint8_t U = GAMEPAD_MASK_UP, Dn = GAMEPAD_MASK_DOWN, Lf = GAMEPAD_MASK_LEFT, Rt = GAMEPAD_MASK_RIGHT;
         uint8_t d; uint64_t t; int k = 0;
-        if (!absGet(0, d, t)) return false;
-        if (d == 0) { if (now - t > 6ULL * FRAME_US) return false; k = 1; if (!absGet(1, d, t)) return false; }
-        if (d == (U | Rt) || d == (U | Lf)) { k++; if (!absGet(k, d, t)) return false; }
-        uint8_t h = d & (Lf | Rt);
-        if (d != Rt && d != Lf) return false;
+        for (; k < 4 && absGet(k, d, t); k++) {          // skip neutral / ↗ / ↖ after the forward
+            if (d == Rt || d == Lf) break;
+            if (d != 0 && d != (U | Rt) && d != (U | Lf)) return false;
+        }
+        if (!absGet(k, d, t) || (d != Rt && d != Lf)) return false;
+        uint8_t h = d; uint64_t tH = t;
         if (!absGet(k + 1, d, t) || d != (Dn | h)) return false;
-        uint64_t tDiag = t;
         if (!absGet(k + 2, d, t) || d != Dn) return false;
-        return now - tDiag <= 20ULL * FRAME_US;
+        return now - tH <= 8ULL * FRAME_US;
     }
     // ↓ ↓ (two separate presses within 12f) then HK within 7f of the second ↓
     bool sawDownDown(uint64_t now) {
@@ -1242,10 +1242,11 @@ namespace {
         }
         return false;
     }
-    // ---------------- Luke: your qcf / qcb + LP/MP/HP holds that punch, released at 18.2-20f
-    // from its first frame (even if you let go earlier); other attacks are ignored meanwhile
+    // ---------------- Luke: your qcf / qcb, then a punch within 8f. The first 6f are yours (let go = nothing);
+    // still held at 6f -> held until a random 18.2-19.8f from your press, then released (even if you still hold it)
     uint32_t lukeHoldBtn = 0, lukeSuppress = 0, prevLukePhys = 0;
-    uint64_t lukeEnd = 0;
+    uint64_t lukeStart = 0, lukeEnd = 0;
+    bool lukeTaken = false;
     void lukeProcess(Gamepad* gp, uint64_t now) {
         uint8_t dpad = gp->state.dpad;
         if (dpad != prevAbs) absPush(dpad, now);
@@ -1255,15 +1256,21 @@ namespace {
         prevLukePhys = phys;
         lukeSuppress &= phys;                   // let go = usable again
         if (lukeHoldBtn) {
-            if (now < lukeEnd) { gp->state.buttons = (phys & ~ATTACK_MASK) | lukeHoldBtn; return; }
-            lukeHoldBtn = 0;
-            lukeSuppress |= phys & ATTACK_MASK;  // still held at the release: stays off until you let go
-        } else if ((rise & PUNCH_MASK) && !V.playing && sawQuarterCircleLuke(now)) {
+            if (!lukeTaken) {
+                if (!(phys & lukeHoldBtn)) lukeHoldBtn = 0;                 // let go before 6f: nothing
+                else if (now >= lukeStart + 6ULL * FRAME_US) lukeTaken = true;
+            }
+            if (lukeTaken) {
+                if (now < lukeEnd) gp->state.buttons |= lukeHoldBtn;
+                else { lukeSuppress |= phys & lukeHoldBtn; lukeHoldBtn = 0; lukeTaken = false; }
+            }
+        }
+        if (!lukeHoldBtn && (rise & PUNCH_MASK) && !V.playing && sawQuarterCircleLuke(now)) {
             lukeHoldBtn = rise & PUNCH_MASK;
-            lukeEnd = now + randomRange(F10(182), F10(200));
-            lukeSuppress = 0;
-            gp->state.buttons = (phys & ~ATTACK_MASK) | lukeHoldBtn;
-            return;
+            lukeStart = now;
+            lukeEnd = now + randomRange(F10(182), F10(198));
+            lukeTaken = false;
+            lukeSuppress &= ~lukeHoldBtn;
         }
         gp->state.buttons &= ~lukeSuppress;
     }
@@ -1637,7 +1644,7 @@ void InputMacro::preprocess()
             arjinActive = (profileIdx == 2);
             pinkActive = (profileIdx == 3);
             { static const int pic[5] = {0, 4, 1, 2, 3}; g_profilePic = pic[profileIdx]; }
-            g_lukeMode = lukeActive; lukeHoldBtn = 0; lukeSuppress = 0;
+            g_lukeMode = lukeActive; lukeHoldBtn = 0; lukeSuppress = 0; lukeTaken = false;
             g_sagatBurnout = false;
             lvl3Until = 0; arjinHKHold = false; arjinBlockUntil = 0; arjinPendUntil = 0; arjinPending = 0; arjinDownSwallow = false;
             g_sagatMode = sagatActive;
