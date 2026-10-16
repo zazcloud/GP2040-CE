@@ -5,7 +5,6 @@
 #include "profile_pics.h"
 
 extern volatile int g_profilePic;
-extern volatile char g_lukeDbg[24];
 
 void SplashScreen::init() {
     getRenderer()->clearScreen();
@@ -33,10 +32,6 @@ void SplashScreen::drawScreen() {
             getRenderer()->clearScreen();
             if (pic) getRenderer()->drawSprite((uint8_t*) pic, 128, 64, 16, 0, 0, 1);
             else getRenderer()->drawSprite((uint8_t*) getDisplayOptions().splashImage.bytes, 128, 64, 16, 0, 0, 1);
-            if (g_profilePic == 4) {                    // DEBUG: Luke motion info on the bottom row
-                getRenderer()->drawRectangle(0, 56, 127, 63, 0, 1);
-                getRenderer()->drawText(0, 7, std::string((const char*)g_lukeDbg));
-            }
 
 	}
 }

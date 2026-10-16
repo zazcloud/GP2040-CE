@@ -38,7 +38,6 @@ volatile bool g_pinkMode         = false;   // Manon profile active (pink LEDs)
 volatile int  g_profilePic       = 0;       // screen picture: 0 Sagat, 1 Arjin, 2 Manon, 3 Viper (stored splash), 4 Luke
 volatile bool g_lukeMode         = false;   // Luke profile active (blue LEDs)
 volatile bool g_lilyMode         = false;   // Lily profile active (tiffany LEDs)
-volatile char g_lukeDbg[24]      = "luke dbg: press P";   // DEBUG line under the Luke picture
 volatile uint32_t g_sagatGearMask = 0;      // attack button of the current gear (red LED)
 
 namespace {
@@ -1174,6 +1173,7 @@ namespace {
         uint32_t physRise = phys & ~prevPinkPhys;
         prevPinkPhys = phys;
         uint8_t dpad = gp->state.dpad;
+        if (manon) dpad = runSOCDCleaner(Gamepad::resolveSOCDMode(gp->getOptions()), dpad);   // Manon: the stick as the game sees it
         if (dpad != prevAbs) { absPush(dpad, now); }
         bool downRise = (dpad & GAMEPAD_MASK_DOWN) && !(prevAbs != 0xFF && (prevAbs & GAMEPAD_MASK_DOWN));
         prevAbs = dpad;
@@ -1281,25 +1281,11 @@ namespace {
                 else { lukeSuppress |= phys & lukeHoldBtn; lukeHoldBtn = 0; lukeTaken = false; }
             }
         }
-        if (rise & PUNCH_MASK) {                // DEBUG: last 6 stick states (hex, oldest first), result, macro-playing flag
-            static const char hx[] = "0123456789ABCDEF";
-            static uint8_t presses = 0, hits = 0;
-            presses++;
-            bool ok = !lukeHoldBtn && sawQuarterCircleLuke(now);
-            if (ok) hits++;
-            char* o = (char*)g_lukeDbg; int n = 0;
-            for (int i = 5; i >= 0; i--) { uint8_t d; uint64_t t; o[n++] = absGet(i, d, t) ? hx[d & 15] : '.'; }
-            o[n++] = ' '; o[n++] = lukeHoldBtn ? 'H' : lukeWhy;
-            o[n++] = ' '; o[n++] = 'V'; o[n++] = V.playing ? '1' : '0';
-            o[n++] = ' '; o[n++] = 'P'; o[n++] = hx[presses % 10];
-            o[n++] = ' '; o[n++] = 'M'; o[n++] = hx[hits % 10];
-            o[n] = 0;
-            lukeWhy = '-';
-        }
         if (!lukeHoldBtn && (rise & PUNCH_MASK) && sawQuarterCircleLuke(now)) {
             lukeHoldBtn = rise & PUNCH_MASK;
             lukeStart = now;
-            lukeEnd = now + randomRange(F10(182), F10(198));
+            lukeEnd = now + (lukeHoldBtn == MP ? randomRange(F10(220), F10(230))     // MP version: 22-23f
+                                               : randomRange(F10(182), F10(198)));   // LP / HP: 18.2-19.8f
             lukeTaken = false;
             lukeSuppress &= ~lukeHoldBtn;
         }

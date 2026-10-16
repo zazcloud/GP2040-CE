@@ -2,7 +2,6 @@
 #include "profile_pics.h"
 #include "storagemanager.h"
 extern volatile int g_profilePic;
-extern volatile char g_lukeDbg[24];
 #include "buttonlayouts.h"
 #include "drivermanager.h"
 #include "drivers/ps4/PS4Driver.h"
@@ -270,10 +269,6 @@ void ButtonLayoutScreen::drawScreen() {
                            : (g_profilePic == 2) ? PIC_MANON : (const uint8_t*)Storage::getInstance().getDisplayOptions().splashImage.bytes;
         getRenderer()->clearScreen();
         getRenderer()->drawSprite((uint8_t*)pic, 128, 64, 16, 0, 0, 1);
-        if (g_profilePic == 4) {                    // DEBUG: Luke motion info on the bottom row
-            getRenderer()->drawRectangle(0, 56, 127, 63, 0, 1);
-            getRenderer()->drawText(0, 7, std::string((const char*)g_lukeDbg));
-        }
         return;
     }
     if (bannerDisplay) {
