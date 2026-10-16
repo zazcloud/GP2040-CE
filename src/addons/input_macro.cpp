@@ -1116,17 +1116,22 @@ namespace {
     }
     // Luke: ↓ (any length) → ↘/↙ → →/← (a ↗/↖ after it is fine); the punch within 8f of reaching →/←
     bool sawQuarterCircleLuke(uint64_t now) {
+        // walks back through the stick history; tiny switch flickers (↙ ← ↙ ←, ↓ ↙ ↓ ↙) are tolerated
         const uint8_t U = GAMEPAD_MASK_UP, Dn = GAMEPAD_MASK_DOWN, Lf = GAMEPAD_MASK_LEFT, Rt = GAMEPAD_MASK_RIGHT;
         uint8_t d; uint64_t t; int k = 0;
-        for (; k < 4 && absGet(k, d, t); k++) {          // skip neutral / ↗ / ↖ after the forward
-            if (d == Rt || d == Lf) break;
-            if (d != 0 && d != (U | Rt) && d != (U | Lf)) return false;
+        uint8_t h = 0; uint64_t tH = 0; bool diag = false;
+        for (; k < 16 && absGet(k, d, t); k++) {
+            if (!h) {                                    // after the forward: neutral / ↗ / ↖ allowed
+                if (d == Rt || d == Lf) { h = d; tH = t; continue; }
+                if (d == 0 || d == (U | Rt) || d == (U | Lf)) continue;
+                return false;
+            }
+            if (d == h) { if (!diag) tH = t; continue; }  // first time you reached →/←
+            if (d == (Dn | h)) { diag = true; continue; }
+            if (d == Dn && diag) return now - tH <= 8ULL * FRAME_US;
+            return false;
         }
-        if (!absGet(k, d, t) || (d != Rt && d != Lf)) return false;
-        uint8_t h = d; uint64_t tH = t;
-        if (!absGet(k + 1, d, t) || d != (Dn | h)) return false;
-        if (!absGet(k + 2, d, t) || d != Dn) return false;
-        return now - tH <= 8ULL * FRAME_US;
+        return false;
     }
     // ↓ ↓ (two separate presses within 12f) then HK within 7f of the second ↓
     bool sawDownDown(uint64_t now) {
