@@ -1114,6 +1114,20 @@ namespace {
         if (!absGet(k + 2, d, t) || d != Dn) return false;
         return tEnd - t <= 25ULL * FRAME_US;
     }
+    // Luke: same motion, but holding ↓ as long as you like is fine; ↙/↘ to the punch within 20f
+    bool sawQuarterCircleLuke(uint64_t now) {
+        const uint8_t U = GAMEPAD_MASK_UP, Dn = GAMEPAD_MASK_DOWN, Lf = GAMEPAD_MASK_LEFT, Rt = GAMEPAD_MASK_RIGHT;
+        uint8_t d; uint64_t t; int k = 0;
+        if (!absGet(0, d, t)) return false;
+        if (d == 0) { if (now - t > 6ULL * FRAME_US) return false; k = 1; if (!absGet(1, d, t)) return false; }
+        if (d == (U | Rt) || d == (U | Lf)) { k++; if (!absGet(k, d, t)) return false; }
+        uint8_t h = d & (Lf | Rt);
+        if (d != Rt && d != Lf) return false;
+        if (!absGet(k + 1, d, t) || d != (Dn | h)) return false;
+        uint64_t tDiag = t;
+        if (!absGet(k + 2, d, t) || d != Dn) return false;
+        return now - tDiag <= 20ULL * FRAME_US;
+    }
     // ↓ ↓ (two separate presses within 12f) then HK within 7f of the second ↓
     bool sawDownDown(uint64_t now) {
         const uint8_t Dn = GAMEPAD_MASK_DOWN;
@@ -1244,7 +1258,7 @@ namespace {
             if (now < lukeEnd) { gp->state.buttons = (phys & ~ATTACK_MASK) | lukeHoldBtn; return; }
             lukeHoldBtn = 0;
             lukeSuppress |= phys & ATTACK_MASK;  // still held at the release: stays off until you let go
-        } else if ((rise & PUNCH_MASK) && !V.playing && sawQuarterCircle(now)) {
+        } else if ((rise & PUNCH_MASK) && !V.playing && sawQuarterCircleLuke(now)) {
             lukeHoldBtn = rise & PUNCH_MASK;
             lukeEnd = now + randomRange(F10(182), F10(200));
             lukeSuppress = 0;
