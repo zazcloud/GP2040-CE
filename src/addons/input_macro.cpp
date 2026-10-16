@@ -231,7 +231,7 @@ namespace {
     MacroOptions g_lilyOpts;
     void buildLilyOptions() {
         g_lilyOpts = g_sagatOpts;
-        for (int i = 0; i < 4; i++) g_lilyOpts.macroList[i].enabled = false;   // SPD + supers run by the Lily engine
+        for (int i = 2; i < 6; i++) g_lilyOpts.macroList[i].enabled = false;   // gear stays Sagat's; supers + SPD run by the Lily engine
     }
     void buildArjinOptions() {
         g_arjinOpts = g_sagatOpts;      // gear DP right/left from Sagat (punch gears only)
@@ -1304,7 +1304,7 @@ namespace {
         }
         gp->state.buttons &= ~lukeSuppress;
     }
-    // ---------------- Lily: Macro 1/2 = SPD (← ↙ ↓ → ↗ + LP / HP, follows the side),
+    // ---------------- Lily: Macro 1/2 = Sagat gear, Macro 5/6 = SPD (← ↙ ↓ → ↗ + LP / HP, follows the side),
     // a punch held or pressed during it = OD (two punches); Macro 3 = qcb qcb + P, Macro 4 = qcf qcf + P
     uint32_t prevLilyPins = 0, lilyPunch = 0;
     bool lilySpd = false, lilyOD = false;
@@ -1330,7 +1330,7 @@ namespace {
             lilySpd = false;
         }
         if (!rise || macroBusy) return false;
-        if (rise & (m1 | m2)) {
+        if (rise & (m1 | m2)) {               // m1 / m2 here = Macro 5 / 6
             lilyPunch = (rise & m1) ? LP : HP;
             vClear();
             auto ar = [](){ return randomRange(F10(12), F10(20)); };
@@ -1787,7 +1787,7 @@ void InputMacro::preprocess()
     }
     if (lukeActive) lukeProcess(gamepad, now);
     if (lilyActive) {
-        if (lilyProcess(gamepad, now, macroPinMasks[0], macroPinMasks[1], macroPinMasks[2], macroPinMasks[3], isMacroRunning)) {
+        if (lilyProcess(gamepad, now, macroPinMasks[4], macroPinMasks[5], macroPinMasks[2], macroPinMasks[3], isMacroRunning)) {
             prevMacroInputPressed = true;
             return;
         }
