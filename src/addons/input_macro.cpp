@@ -1302,7 +1302,7 @@ namespace {
         if (!lukeHoldBtn && (rise & PUNCH_MASK) && sawQuarterCircleLuke(now)) {
             lukeHoldBtn = rise & PUNCH_MASK;
             lukeStart = now;
-            lukeEnd = now + (lukeHoldBtn == MP ? randomRange(F10(220), F10(230))     // MP version: 22-23f
+            lukeEnd = now + (lukeHoldBtn == MP ? randomRange(F10(240), F10(250))     // MP version: 24-25f
                                                : randomRange(F10(182), F10(198)));   // LP / HP: 18.2-19.8f
             lukeTaken = false;
             lukeSuppress &= ~lukeHoldBtn;
@@ -1357,7 +1357,7 @@ namespace {
         }
         return false;
     }
-    // ---------------- Cammy: forward jump, then a kick within 6f of the jump = qcb + that kick
+    // ---------------- Cammy: diagonal jump, then a kick within 25f of the jump = qcb + that kick
     // (another kick within 2f of the first = OD, both kicks); Macro 3 = qcf qcf + P, Macro 4 = qcb qcf + P
     uint32_t prevCammyPins = 0, prevCammyPhys = 0, cammyKick = 0;
     uint8_t  prevCammyAbs = 0;
@@ -1394,7 +1394,7 @@ namespace {
         }
         if (macroBusy) return false;
         uint32_t k = physRise & KICK_MASK;
-        if (k && cammyJumpAt && now - cammyJumpAt <= 6ULL * FRAME_US) {
+        if (k && cammyJumpAt && now - cammyJumpAt <= 25ULL * FRAME_US) {
             cammyKick = k; cammyKickAt = now; cammyJumpAt = 0;
             V.suppress |= k;
             vClear();
