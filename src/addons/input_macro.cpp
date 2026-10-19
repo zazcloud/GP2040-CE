@@ -1424,7 +1424,7 @@ namespace {
         return false;
     }
     // ---------------- Aki: Macro 1 qcf+HP, 2 qcb+HP, 3 qcf qcf+HP, 4 qcb qcb+HP, 5 qcf qcf+kick, 6 qcb qcb+kick
-    // (kick = LK / HK random, all follow the side switch); your ↓+HK then X within 20f = qcf qcf + kick
+    // (kick = LK / HK random; macros fixed on screen, only X follows the side switch); your ↓+HK then X within 20f = qcf qcf + kick
     uint32_t prevAkiPins = 0, prevAkiPhys = 0;
     uint64_t akiHKAt = 0;
     bool akiProcess(Gamepad* gp, uint64_t now, const uint32_t* m, bool macroBusy) {
@@ -1452,17 +1452,19 @@ namespace {
         }
         if (!rise) return false;
         auto ar = [](){ return randomRange(F10(12), F10(20)); };
-        if (rise & (m[0] | m[1])) {             // qcf / qcb + HP
-            bool fwd = (rise & m[0]) != 0;
+        // macros are fixed on screen (not the side switch): "right" = toward →, "left" = toward ←
+        auto dn = [&](){ return absDir(true, 0); };
+        if (rise & (m[0] | m[1])) {             // ↓ ↘ → + HP / ↓ ↙ ← + HP
+            int h = (rise & m[0]) ? +1 : -1;
             vClear();
-            vPush(D_, 0, ar()); vPush(fwd ? DF : DB, 0, ar());
-            vPush(fwd ? F_ : B_, HP, vBtn());
-        } else if (rise & (m[2] | m[3])) {      // supers: qcf qcf / qcb qcb + HP
-            bool fwd = (rise & m[2]) != 0;
-            superArrowsAndFinish({D_, fwd ? DF : DB, fwd ? F_ : B_, D_, fwd ? DF : DB}, fwd ? F_ : B_, HP);
-        } else if (rise & (m[4] | m[5])) {      // qcf qcf / qcb qcb + LK / HK
-            bool fwd = (rise & m[4]) != 0;
-            superArrowsAndFinish({D_, fwd ? DF : DB, fwd ? F_ : B_, D_, fwd ? DF : DB}, fwd ? F_ : B_, coin() ? LK : HK);
+            vPush(dn(), 0, ar()); vPush(absDir(true, h), 0, ar());
+            vPush(absDir(false, h), HP, vBtn());
+        } else if (rise & (m[2] | m[3])) {      // supers: ↓ ↘ → ↓ ↘ → / ↓ ↙ ← ↓ ↙ ← + HP
+            int h = (rise & m[2]) ? +1 : -1;
+            superArrowsAndFinish({dn(), absDir(true, h), absDir(false, h), dn(), absDir(true, h)}, absDir(false, h), HP);
+        } else if (rise & (m[4] | m[5])) {      // ↓ ↘ → ↓ ↘ → / ↓ ↙ ← ↓ ↙ ← + LK / HK
+            int h = (rise & m[4]) ? +1 : -1;
+            superArrowsAndFinish({dn(), absDir(true, h), absDir(false, h), dn(), absDir(true, h)}, absDir(false, h), coin() ? LK : HK);
         } else return false;
         startSeq(now, 0, 0);
         return runSeq(gp, now, prel);
