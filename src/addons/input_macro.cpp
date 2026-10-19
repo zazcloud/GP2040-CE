@@ -39,6 +39,7 @@ volatile int  g_profilePic       = 0;       // screen picture: 0 Sagat, 1 Arjin,
 volatile bool g_lukeMode         = false;   // Luke profile active (blue LEDs)
 volatile bool g_lilyMode         = false;   // Lily profile active (tiffany LEDs)
 volatile bool g_cammyMode        = false;   // Cammy profile active (cyan LEDs)
+volatile bool g_akiMode          = false;   // Aki profile active (purple LEDs)
 volatile uint32_t g_sagatGearMask = 0;      // attack button of the current gear (red LED)
 
 namespace {
@@ -224,13 +225,19 @@ namespace {
     bool lukeActive = false;        // Luke profile (Sagat set + held punch after qcf/qcb)
     bool lilyActive = false;        // Lily profile (SPD on Macro 5/6, qcb/qcf supers)
     bool cammyActive = false;       // Cammy profile (Sagat gear, kick OD DP, air qcb kick after forward jump)
-    int  profileIdx = 0;            // 0 Sagat, 1 Luke, 2 Cammy, 3 Lily, 4 Arjin, 5 Manon, 6 stored config (Viper)
+    bool akiActive = false;         // Aki profile (all six macros run by the Aki engine, ↓HK -> X = Level 1)
+    int  profileIdx = 0;            // 0 Sagat, 1 Luke, 2 Cammy, 3 Aki, 4 Lily, 5 Arjin, 6 Manon, 7 stored config (Viper)
     MacroOptions g_pinkOpts;
     MacroOptions g_arjinOpts;
     MacroOptions g_lukeOpts;
     void buildLukeOptions() { g_lukeOpts = g_sagatOpts; }   // same as Sagat
     MacroOptions g_lilyOpts;
     MacroOptions g_cammyOpts;
+    MacroOptions g_akiOpts;
+    void buildAkiOptions() {
+        g_akiOpts = g_sagatOpts;
+        for (int i = 0; i < 6; i++) g_akiOpts.macroList[i].enabled = false;   // all run by the Aki engine
+    }
     void buildCammyOptions() {
         g_cammyOpts = g_sagatOpts;
         g_cammyOpts.macroList[2].enabled = false;   // supers run by the Cammy engine
@@ -1416,6 +1423,50 @@ namespace {
         }
         return false;
     }
+    // ---------------- Aki: Macro 1 qcf+HP, 2 qcb+HP, 3 qcf qcf+HP, 4 qcb qcb+HP, 5 qcf qcf+kick, 6 qcb qcb+kick
+    // (kick = LK / HK random, all follow the side switch); your ↓+HK then X within 20f = qcf qcf + kick
+    uint32_t prevAkiPins = 0, prevAkiPhys = 0;
+    uint64_t akiHKAt = 0;
+    bool akiProcess(Gamepad* gp, uint64_t now, const uint32_t* m, bool macroBusy) {
+        uint32_t mask = m[0] | m[1] | m[2] | m[3] | m[4] | m[5];
+        uint32_t pins = (uint32_t)gp->debouncedGpio & mask;
+        uint32_t rise = pins & ~prevAkiPins;
+        prevAkiPins = pins;
+        uint32_t phys = gp->state.buttons;
+        uint32_t physRise = phys & ~prevAkiPhys;
+        prevAkiPhys = phys;
+        V.suppress &= phys;
+        uint8_t prel = toRel(gp->state.dpad);
+        uint8_t ad = runSOCDCleaner(Gamepad::resolveSOCDMode(gp->getOptions()), gp->state.dpad);
+        if ((physRise & HK) && (ad & GAMEPAD_MASK_DOWN)) akiHKAt = now;   // your ↓ + HK
+        if (V.playing) {
+            if (runSeq(gp, now, prel)) return true;
+        }
+        if (macroBusy) return false;
+        if ((physRise & XBTN) && !g_sagatBurnout && akiHKAt && now - akiHKAt <= 20ULL * FRAME_US) {
+            akiHKAt = 0;
+            V.suppress |= XBTN;                 // X stays hidden until you let go of it
+            seqSagatLevel1(true);               // qcf qcf + LK / HK
+            startSeq(now, 0, 0);
+            return runSeq(gp, now, prel);
+        }
+        if (!rise) return false;
+        auto ar = [](){ return randomRange(F10(12), F10(20)); };
+        if (rise & (m[0] | m[1])) {             // qcf / qcb + HP
+            bool fwd = (rise & m[0]) != 0;
+            vClear();
+            vPush(D_, 0, ar()); vPush(fwd ? DF : DB, 0, ar());
+            vPush(fwd ? F_ : B_, HP, vBtn());
+        } else if (rise & (m[2] | m[3])) {      // supers: qcf qcf / qcb qcb + HP
+            bool fwd = (rise & m[2]) != 0;
+            superArrowsAndFinish({D_, fwd ? DF : DB, fwd ? F_ : B_, D_, fwd ? DF : DB}, fwd ? F_ : B_, HP);
+        } else if (rise & (m[4] | m[5])) {      // qcf qcf / qcb qcb + LK / HK
+            bool fwd = (rise & m[4]) != 0;
+            superArrowsAndFinish({D_, fwd ? DF : DB, fwd ? F_ : B_, D_, fwd ? DF : DB}, fwd ? F_ : B_, coin() ? LK : HK);
+        } else return false;
+        startSeq(now, 0, 0);
+        return runSeq(gp, now, prel);
+    }
     // ---------------- X turbo (every profile, burnout off): random 1.2-2.2f on / off
     bool xTurboPrev = false, xTurboOn = true;
     uint64_t xTurboNext = 0;
@@ -1447,7 +1498,7 @@ namespace {
         if (g_sagatBurnout) {
             gp->state.buttons &= ~XBTN;           // X never reaches the game in burnout
             if (xRising && !macroBusy) {
-                seqSagatLevel1(pinkActive || arjinActive || cammyActive, lilyActive); startSeq(now, 0, 0);
+                seqSagatLevel1(pinkActive || arjinActive || cammyActive || akiActive, lilyActive); startSeq(now, 0, 0);
                 if (runSeq(gp, now, toRel(gp->state.dpad))) return true;
             }
         }
@@ -1528,6 +1579,8 @@ void InputMacro::setup() {
     buildLukeOptions();
     buildLilyOptions();
     buildCammyOptions();
+    buildAkiOptions();
+    akiActive = false; g_akiMode = false;
     cammyActive = false; g_cammyMode = false;
     profileIdx = 0; pinkActive = false; arjinActive = false; lukeActive = false; g_lukeMode = false; lilyActive = false; g_lilyMode = false; g_pinkMode = false; g_profilePic = 0;
     sagatActive = true;                 // power-up in the built-in Sagat set
@@ -1783,14 +1836,16 @@ void InputMacro::preprocess()
             V.playing = false; V.win = W_NONE; V.chordPending = false; V.lv2Pending = false; V.delayedAt = 0; V.pendMask = 0;
             V.suppress = 0; V.rawPending = false;
             gearPendingMacro = -1;
-            profileIdx = (profileIdx + 1) % 7;     // Sagat -> Luke -> Cammy -> Lily -> Arjin -> Manon -> Viper -> Sagat
-            sagatActive = (profileIdx != 6);
+            profileIdx = (profileIdx + 1) % 8;     // Sagat -> Luke -> Cammy -> Aki -> Lily -> Arjin -> Manon -> Viper -> Sagat
+            sagatActive = (profileIdx != 7);
             lukeActive = (profileIdx == 1);
             cammyActive = (profileIdx == 2);
-            lilyActive = (profileIdx == 3);
-            arjinActive = (profileIdx == 4);
-            pinkActive = (profileIdx == 5);
-            { static const int pic[7] = {0, 4, 6, 5, 1, 2, 3}; g_profilePic = pic[profileIdx]; }
+            akiActive = (profileIdx == 3);
+            lilyActive = (profileIdx == 4);
+            arjinActive = (profileIdx == 5);
+            pinkActive = (profileIdx == 6);
+            { static const int pic[8] = {0, 4, 6, 7, 5, 1, 2, 3}; g_profilePic = pic[profileIdx]; }
+            g_akiMode = akiActive; akiHKAt = 0;
             g_cammyMode = cammyActive; cammyAir = false; cammyJumpAt = 0;
             g_lilyMode = lilyActive; lilySpd = false; lilyOD = false;
             g_lukeMode = lukeActive; lukeHoldBtn = 0; lukeSuppress = 0; lukeTaken = false;
@@ -1803,9 +1858,10 @@ void InputMacro::preprocess()
             inputMacroOptions = (profileIdx == 0) ? &g_sagatOpts
                               : (profileIdx == 1) ? &g_lukeOpts
                               : (profileIdx == 2) ? &g_cammyOpts
-                              : (profileIdx == 3) ? &g_lilyOpts
-                              : (profileIdx == 4) ? &g_arjinOpts
-                              : (profileIdx == 5) ? &g_pinkOpts
+                              : (profileIdx == 3) ? &g_akiOpts
+                              : (profileIdx == 4) ? &g_lilyOpts
+                              : (profileIdx == 5) ? &g_arjinOpts
+                              : (profileIdx == 6) ? &g_pinkOpts
                               : &Storage::getInstance().getAddonOptions().macroOptions;
             macrosOn = true;
             detectViperMode(inputMacroOptions);
@@ -1855,6 +1911,13 @@ void InputMacro::preprocess()
         gamepad->state.buttons &= ~V.suppress;   // gear-choice punch stays hidden until released
     }
     if (lukeActive) lukeProcess(gamepad, now);
+    if (akiActive) {
+        if (akiProcess(gamepad, now, (const uint32_t*)macroPinMasks, isMacroRunning)) {
+            prevMacroInputPressed = true;
+            return;
+        }
+        gamepad->state.buttons &= ~V.suppress;   // X used for the ↓HK rule stays hidden until released
+    }
     if (cammyActive) {
         if (cammyProcess(gamepad, now, macroPinMasks[2], macroPinMasks[3], isMacroRunning)) {
             prevMacroInputPressed = true;
