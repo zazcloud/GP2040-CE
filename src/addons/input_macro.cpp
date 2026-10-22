@@ -1365,7 +1365,7 @@ namespace {
         return false;
     }
     // ---------------- Cammy: diagonal jump, then a kick within 25f of the jump = qcb + that kick
-    // (another kick within 2f of the first = OD, both kicks); Macro 3 = qcf qcf + P, Macro 4 = qcb qcf + P
+    // (another kick within 2f of the first = OD, both kicks); Macro 3 = qcf qcf + P, Macro 4 = qcb qcb + P
     uint32_t prevCammyPins = 0, prevCammyPhys = 0, cammyKick = 0;
     uint8_t  prevCammyAbs = 0;
     int      cammyJumpDir = 0;                      // +1 jumped ↗, -1 jumped ↖ (absolute, side switch not used)
@@ -1414,9 +1414,9 @@ namespace {
             return runSeq(gp, now, prel);
         }
         if (rise & (m3 | m4)) {
-            bool left = (rise & m3) != 0;           // Macro 3 = qcf qcf, Macro 4 = qcb qcf (+ LP / HP)
+            bool left = (rise & m3) != 0;           // Macro 3 = qcf qcf, Macro 4 = qcb qcb (+ LP / HP)
             if (left) superArrowsAndFinish({D_, DF, F_, D_, DF}, F_, coin() ? LP : HP);
-            else      superArrowsAndFinish({D_, DB, B_, D_, DF}, F_, coin() ? LP : HP);
+            else      superArrowsAndFinish({D_, DB, B_, D_, DB}, B_, coin() ? LP : HP);   // qcb qcb (Killer Bee Spin)
             cammyAir = false;
             startSeq(now, 0, 0);
             return runSeq(gp, now, prel);
