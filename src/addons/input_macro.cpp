@@ -10,7 +10,7 @@
 //  1) Gear macros (label starts with "G "):
 //     hold an attack button + the macro button for 2 s -> that attack becomes
 //     the macro's gear. Smart start skips the first direction if it is held or
-//     was released within 9 frames.
+//     was released within 6 frames.
 //
 //  2) Randomized timings for every macro (new random values each run):
 //     - Normal macros ............ arrows 1.5-3f, attack 3-7f,
@@ -46,7 +46,7 @@ namespace {
     // ---------------------------------------------------------------- tunables
     constexpr uint32_t FRAME_US        = 16667;           // 1 frame at 60fps
     constexpr uint64_t GEAR_HOLD_US    = 1000000;         // 1 second
-    constexpr uint64_t SKIP_WINDOW_US  = 9 * FRAME_US;    // smart-start window
+    constexpr uint64_t SKIP_WINDOW_US  = 6 * FRAME_US;    // smart-start window
 
     // Frames -> microseconds (x10 to allow one decimal: F10(12) = 1.2 frames)
     constexpr uint32_t F10(uint32_t tenths) { return (uint32_t)((uint64_t)tenths * FRAME_US / 10); }

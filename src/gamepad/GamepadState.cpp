@@ -99,9 +99,10 @@ uint8_t filterToFourWayMode(uint8_t dpad)
  */
 uint8_t runSOCDCleaner(SOCDMode mode, uint8_t dpad)
 {
-	if (mode == SOCD_MODE_BYPASS) {
-		return dpad;
-	}
+	// CUSTOM: fixed SOCD for every profile, whatever the stored setting is:
+	// up + down = neutral, left + right = the last one pressed wins.
+	(void)mode;
+	mode = SOCD_MODE_NEUTRAL;
 
 	static DpadDirection lastUD = DIRECTION_NONE;
 	static DpadDirection lastLR = DIRECTION_NONE;
@@ -141,7 +142,7 @@ uint8_t runSOCDCleaner(SOCDMode mode, uint8_t dpad)
 	switch (dpad & (GAMEPAD_MASK_LEFT | GAMEPAD_MASK_RIGHT))
 	{
 		case (GAMEPAD_MASK_LEFT | GAMEPAD_MASK_RIGHT):
-			if (mode == SOCD_MODE_SECOND_INPUT_PRIORITY && lastLR != DIRECTION_NONE)
+			if (lastLR != DIRECTION_NONE)   // CUSTOM: last input wins on left/right
 				newDpad |= (lastLR == DIRECTION_LEFT) ? GAMEPAD_MASK_RIGHT : GAMEPAD_MASK_LEFT;
 			else if (mode == SOCD_MODE_FIRST_INPUT_PRIORITY && lastLR != DIRECTION_NONE)
 				newDpad |= (lastLR == DIRECTION_LEFT) ? GAMEPAD_MASK_LEFT : GAMEPAD_MASK_RIGHT;
