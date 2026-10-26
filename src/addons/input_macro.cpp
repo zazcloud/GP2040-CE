@@ -1414,9 +1414,10 @@ namespace {
             return runSeq(gp, now, prel);
         }
         if (rise & (m3 | m4)) {
-            bool left = (rise & m3) != 0;           // Macro 3 = qcf qcf, Macro 4 = qcb qcb (+ LP / HP)
-            if (left) superArrowsAndFinish({D_, DF, F_, D_, DF}, F_, coin() ? LP : HP);
-            else      superArrowsAndFinish({D_, DB, B_, D_, DB}, B_, coin() ? LP : HP);   // qcb qcb (Killer Bee Spin)
+            // fixed on screen (not the side switch): Macro 3 = ↓ ↘ → ↓ ↘ →, Macro 4 = ↓ ↙ ← ↓ ↙ ← (+ LP / HP)
+            int h = (rise & m3) ? +1 : -1;
+            superArrowsAndFinish({absDir(true, 0), absDir(true, h), absDir(false, h), absDir(true, 0), absDir(true, h)},
+                                 absDir(false, h), coin() ? LP : HP);
             cammyAir = false;
             startSeq(now, 0, 0);
             return runSeq(gp, now, prel);
