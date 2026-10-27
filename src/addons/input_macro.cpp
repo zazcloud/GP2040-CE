@@ -1069,6 +1069,57 @@ namespace {
 
     bool viperLocked(uint64_t now) { return now < V.airUntil; }
 
+    // ---------------- super spam (built-in profiles): the super comes out as usual; if its button
+    // (Macro 3/4, or X in burnout) is still held when it ends, ↓ ↘ → + the same button repeats in the
+    // same direction until you let go. Gap 0-2f, arrows 1.2-2f. The button goes in either on ↘ (held
+    // to →) or on → (held into the next ↓ or N), 50/50 each time.
+    bool spamArmed = false, spamOn = false, spamIsX = false, spamTailDown = false;
+    uint32_t spamPin = 0, spamBtn = 0;
+    uint8_t spamHz = 0;                       // absolute GAMEPAD_MASK_LEFT / RIGHT
+    void spamReset() { spamArmed = false; spamOn = false; spamTailDown = false; }
+    void armSpam(uint32_t pin, bool isX, uint32_t btn, uint8_t absDpad) {
+        uint8_t hz = absDpad & (GAMEPAD_MASK_LEFT | GAMEPAD_MASK_RIGHT);
+        if (!btn || !hz) return;
+        spamArmed = true; spamOn = false; spamIsX = isX; spamPin = pin;
+        spamBtn = btn; spamHz = hz; spamTailDown = false;
+    }
+    void armSpamFromSeq(uint32_t pin, bool isX) {   // the V sequence just built is the super
+        if (V.seqLen <= 0) return;
+        const VStep& last = V.seq[V.seqLen - 1];
+        armSpam(pin, isX, last.btn & ATTACK_MASK, toAbs(last.dir));
+    }
+    void seqSpamRep() {
+        vClear();
+        auto ar = [](){ return randomRange(F10(12), F10(20)); };
+        uint8_t dn = toRel(GAMEPAD_MASK_DOWN), dg = toRel(GAMEPAD_MASK_DOWN | spamHz), h = toRel(spamHz);
+        if (!spamTailDown) vPush(N_, 0, randomRange(0, F10(20)));   // gap 0-2f
+        if (coin()) {                          // button on ↘, held to →
+            vPush(dn, 0, ar()); vPush(dg, spamBtn, ar()); vPush(h, spamBtn, ar());
+            spamTailDown = false;
+        } else {                               // button on →, held into the next ↓ or N
+            vPush(dn, 0, ar()); vPush(dg, 0, ar()); vPush(h, spamBtn, ar());
+            spamTailDown = coin();
+            vPush(spamTailDown ? dn : N_, spamBtn, randomRange(F10(10), F10(20)));
+        }
+    }
+    bool spamProcess(Gamepad* gp, uint64_t now, bool macroBusy) {
+        if (!spamArmed && !spamOn) return false;
+        bool held = spamIsX ? (gp->state.buttons & XBTN) != 0 : (gp->debouncedGpio & spamPin) != 0;
+        if (!held) {                           // let go: stop right away
+            if (spamOn) V.playing = false;
+            spamReset();
+            return false;
+        }
+        if (spamArmed && !spamOn) {
+            if (V.playing || macroBusy) return false;   // the super is still coming out
+            spamArmed = false; spamOn = true; spamTailDown = false;
+            seqSpamRep(); startSeq(now, 0, 0);
+        }
+        uint8_t prel = toRel(gp->state.dpad);
+        if (runSeq(gp, now, prel)) return true;
+        seqSpamRep(); startSeq(now, 0, 0);     // next round
+        return runSeq(gp, now, prel);
+    }
     // ---------------- Sagat mode extras: burnout (turbo button) and X = Level 1
     bool prevTurbo = false;
     bool prevSagatX = false;
@@ -1267,6 +1318,7 @@ namespace {
         if (rise & (m3 | m4)) {                 // supers
             if (arjinActive || now < lvl3Until) {
                 seqLevel3((rise & m3) != 0);
+                armSpamFromSeq(rise & (m3 | m4), false);
                 lvl3Until = 0;
                 startSeq(now, 0, 0); cgrab = false;
                 return runSeq(gp, now, prel);
@@ -1358,6 +1410,7 @@ namespace {
         if (rise & (m3 | m4)) {
             bool back = (rise & m3) != 0;
             superArrowsAndFinish({D_, back ? DB : DF, back ? B_ : F_, D_, back ? DB : DF}, back ? B_ : F_, coin() ? LP : HP);
+            armSpamFromSeq(rise & (m3 | m4), false);
             lilySpd = false;
             startSeq(now, 0, 0);
             return runSeq(gp, now, prel);
@@ -1418,6 +1471,7 @@ namespace {
             int h = (rise & m3) ? +1 : -1;
             superArrowsAndFinish({absDir(true, 0), absDir(true, h), absDir(false, h), absDir(true, 0), absDir(true, h)},
                                  absDir(false, h), coin() ? LP : HP);
+            armSpamFromSeq(rise & (m3 | m4), false);
             cammyAir = false;
             startSeq(now, 0, 0);
             return runSeq(gp, now, prel);
@@ -1463,6 +1517,7 @@ namespace {
         } else if (rise & (m[2] | m[3])) {      // supers: ↓ ↘ → ↓ ↘ → / ↓ ↙ ← ↓ ↙ ← + HP
             int h = (rise & m[2]) ? +1 : -1;
             superArrowsAndFinish({dn(), absDir(true, h), absDir(false, h), dn(), absDir(true, h)}, absDir(false, h), HP);
+            armSpamFromSeq(rise & (m[2] | m[3]), false);
         } else if (rise & (m[4] | m[5])) {      // ↓ ↘ → ↓ ↘ → / ↓ ↙ ← ↓ ↙ ← + LK / HK
             int h = (rise & m[4]) ? +1 : -1;
             superArrowsAndFinish({dn(), absDir(true, h), absDir(false, h), dn(), absDir(true, h)}, absDir(false, h), coin() ? LK : HK);
@@ -1502,11 +1557,13 @@ namespace {
             gp->state.buttons &= ~XBTN;           // X never reaches the game in burnout
             if (xRising && !macroBusy) {
                 seqSagatLevel1(pinkActive || arjinActive || cammyActive || akiActive, lilyActive); startSeq(now, 0, 0);
+                armSpamFromSeq(0, true);
                 if (runSeq(gp, now, toRel(gp->state.dpad))) return true;
             }
         }
         return false;
     }
+
 }
 
 bool InputMacro::available() {
@@ -1755,6 +1812,16 @@ void InputMacro::runCurrentMacro() {
 
         if ((int)macroInputPosition >= stepCount(macro)) {
             if ( macro.macroType == ON_PRESS ) {
+                if (sagatActive && !viperMode && isSuperMacro(macro) &&
+                        (macroPosition == 2 || macroPosition == 3)) {   // CUSTOM: super spam while held
+                    uint32_t lm = macro.macroInputs[stepCount(macro) - 1].buttonMask;
+                    uint32_t a = lm & ATTACK_MASK;
+                    uint32_t nb = (a & KICK_MASK) ? (superLight ? LK : HK) : (superLight ? LP : HP);
+                    uint8_t d = 0;
+                    if (lm & GAMEPAD_MASK_DL) d |= GAMEPAD_MASK_LEFT;
+                    if (lm & GAMEPAD_MASK_DR) d |= GAMEPAD_MASK_RIGHT;
+                    if (a) armSpam((uint32_t)macroPinMasks[macroPosition], false, nb, d);
+                }
                 reset(); // On press = no more macro
                 return;
             } else {
@@ -1839,6 +1906,7 @@ void InputMacro::preprocess()
             V.playing = false; V.win = W_NONE; V.chordPending = false; V.lv2Pending = false; V.delayedAt = 0; V.pendMask = 0;
             V.suppress = 0; V.rawPending = false;
             gearPendingMacro = -1;
+            spamReset();
             profileIdx = (profileIdx + 1) % 8;     // Sagat -> Luke -> Cammy -> Aki -> Lily -> Arjin -> Manon -> Viper -> Sagat
             sagatActive = (profileIdx != 7);
             lukeActive = (profileIdx == 1);
@@ -1894,6 +1962,15 @@ void InputMacro::preprocess()
 
     // CUSTOM: remember when each direction was last physically held
     trackDirections(gamepad->state.dpad, now);
+
+    // CUSTOM: super spam (built-in profiles) owns the output while it repeats
+    if (sagatActive && !viperMode) {
+        if (spamProcess(gamepad, now, isMacroRunning)) {
+            prevMacroInputPressed = true;
+            if (g_sagatBurnout) gamepad->state.buttons &= ~XBTN;
+            return;
+        }
+    }
 
     // CUSTOM: Viper engine (runs first, owns the output while a Viper move plays)
     if (viperMode) {
