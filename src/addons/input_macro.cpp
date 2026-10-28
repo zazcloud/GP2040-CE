@@ -1417,6 +1417,7 @@ namespace {
         }
         return false;
     }
+    constexpr uint64_t CHORD_US = FRAME_US / 2;      // buttons "together" = within half a frame, no delay
     // ---------------- Cammy: diagonal jump, then a kick within 25f of the jump = qcb + that kick
     // (another kick within 2f of the first = OD, both kicks); Macro 3 = qcf qcf + P, Macro 4 = qcb qcb + P
     uint32_t prevCammyPins = 0, prevCammyPhys = 0, cammyKick = 0;
@@ -1424,6 +1425,8 @@ namespace {
     int      cammyJumpDir = 0;                      // +1 jumped ↗, -1 jumped ↖ (absolute, side switch not used)
     uint64_t cammyJumpAt = 0, cammyKickAt = 0;
     bool cammyAir = false;
+    bool cammyGrab = false;                         // a LP+MP command grab is playing (HP may still upgrade it to OD)
+    uint64_t cammyGrabAt = 0, cammyLPAt = 0, cammyMPAt = 0, cammyHPAt = 0;
     bool cammyProcess(Gamepad* gp, uint64_t now, uint32_t m3, uint32_t m4, bool macroBusy) {
         uint32_t pins = (uint32_t)gp->debouncedGpio & (m3 | m4);
         uint32_t rise = pins & ~prevCammyPins;
@@ -1449,10 +1452,33 @@ namespace {
                     V.seq[V.seqLen - 1].btn = cammyKick;
                 }
             }
+            if (cammyGrab && (physRise & HP) && now - cammyGrabAt <= CHORD_US && V.seqPos < V.seqLen - 1) {
+                V.suppress |= HP;                   // HP together with LP+MP: OD grab (LK+MK)
+                V.seq[V.seqLen - 1].btn = LK | MK;
+            }
+            bool wasAir = cammyAir;
             if (runSeq(gp, now, prel)) return true;
-            cammyAir = false;
+            if (wasAir && cammyJumpDir) {           // after the air qcb kick: your side flips to the opposite of the jump
+                V.facingRight = (cammyJumpDir < 0);
+                g_viperFacingRight = V.facingRight;
+            }
+            cammyAir = false; cammyGrab = false;
         }
         if (macroBusy) return false;
+        // LP + MP together = command grab (Manon's motion, follows the side) + LK; with HP too = OD (LK + MK)
+        if (physRise & LP) cammyLPAt = now;
+        if (physRise & MP) cammyMPAt = now;
+        if (physRise & HP) cammyHPAt = now;
+        if ((physRise & (LP | MP)) && (phys & LP) && (phys & MP) &&
+            (cammyLPAt > cammyMPAt ? cammyLPAt - cammyMPAt : cammyMPAt - cammyLPAt) <= CHORD_US) {
+            uint64_t first = cammyLPAt < cammyMPAt ? cammyLPAt : cammyMPAt;
+            bool od = (phys & HP) && (cammyHPAt + CHORD_US >= first) && (cammyHPAt <= first + CHORD_US);
+            V.suppress |= phys & PUNCH_MASK;        // the punches stay hidden until released
+            seqCommandGrab(od ? (LK | MK) : LK, (prel & RF) && !(prel & RD));
+            cammyGrab = true; cammyGrabAt = now; cammyAir = false;
+            startSeq(now, 0, 0);
+            return runSeq(gp, now, prel);
+        }
         uint32_t k = physRise & KICK_MASK;
         if (k && cammyJumpAt && now - cammyJumpAt <= 25ULL * FRAME_US) {
             cammyKick = k; cammyKickAt = now; cammyJumpAt = 0;
@@ -1917,7 +1943,7 @@ void InputMacro::preprocess()
             pinkActive = (profileIdx == 6);
             { static const int pic[8] = {0, 4, 6, 7, 5, 1, 2, 3}; g_profilePic = pic[profileIdx]; }
             g_akiMode = akiActive; akiHKAt = 0;
-            g_cammyMode = cammyActive; cammyAir = false; cammyJumpAt = 0;
+            g_cammyMode = cammyActive; cammyAir = false; cammyJumpAt = 0; cammyGrab = false;
             g_lilyMode = lilyActive; lilySpd = false; lilyOD = false;
             g_lukeMode = lukeActive; lukeHoldBtn = 0; lukeSuppress = 0; lukeTaken = false;
             g_sagatBurnout = false;
