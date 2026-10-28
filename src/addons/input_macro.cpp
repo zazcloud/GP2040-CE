@@ -1465,11 +1465,12 @@ namespace {
             cammyAir = false; cammyGrab = false;
         }
         if (macroBusy) return false;
-        // LP + MP together = command grab (Manon's motion, follows the side) + LK; with HP too = OD (LK + MK)
+        // stick on N + LP + MP together = command grab (Manon's motion, follows the side) + LK; with HP too = OD (LK + MK)
         if (physRise & LP) cammyLPAt = now;
         if (physRise & MP) cammyMPAt = now;
         if (physRise & HP) cammyHPAt = now;
-        if ((physRise & (LP | MP)) && (phys & LP) && (phys & MP) &&
+        bool cammyNeutral = runSOCDCleaner(Gamepad::resolveSOCDMode(gp->getOptions()), gp->state.dpad) == 0;
+        if (cammyNeutral && (physRise & (LP | MP)) && (phys & LP) && (phys & MP) &&   // only with the stick on N
             (cammyLPAt > cammyMPAt ? cammyLPAt - cammyMPAt : cammyMPAt - cammyLPAt) <= CHORD_US) {
             uint64_t first = cammyLPAt < cammyMPAt ? cammyLPAt : cammyMPAt;
             bool od = (phys & HP) && (cammyHPAt + CHORD_US >= first) && (cammyHPAt <= first + CHORD_US);
