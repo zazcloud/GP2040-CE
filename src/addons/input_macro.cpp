@@ -1458,8 +1458,8 @@ namespace {
             }
             bool wasAir = cammyAir;
             if (runSeq(gp, now, prel)) return true;
-            if (wasAir && cammyJumpDir) {           // after the air qcb kick: your side flips to the opposite of the jump
-                V.facingRight = (cammyJumpDir < 0);
+            if (wasAir && cammyJumpDir) {           // after the air qcb kick: ↗ -> facing right, ↖ -> facing left
+                V.facingRight = (cammyJumpDir > 0);
                 g_viperFacingRight = V.facingRight;
             }
             cammyAir = false; cammyGrab = false;
@@ -1793,6 +1793,12 @@ void InputMacro::checkMacroAction() {
 
         isMacroRunning = true;
         macroStartTime = now; // current time
+
+        // CUSTOM: DP (gear Macro 1 / 2) sets the side: DP right -> facing left, DP left -> facing right
+        if (sagatActive && macroPosition <= 1 && isGearMacro(macro)) {
+            V.facingRight = (macroPosition == 1);
+            g_viperFacingRight = V.facingRight;
+        }
     }
 }
 
