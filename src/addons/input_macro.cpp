@@ -1794,9 +1794,9 @@ void InputMacro::checkMacroAction() {
         isMacroRunning = true;
         macroStartTime = now; // current time
 
-        // CUSTOM: DP (gear Macro 1 / 2) sets the side: DP right -> facing left, DP left -> facing right
+        // CUSTOM: DP (gear Macro 1 / 2) sets the side: DP right -> facing right, DP left -> facing left
         if (sagatActive && macroPosition <= 1 && isGearMacro(macro)) {
-            V.facingRight = (macroPosition == 1);
+            V.facingRight = (macroPosition == 0);
             g_viperFacingRight = V.facingRight;
         }
     }
