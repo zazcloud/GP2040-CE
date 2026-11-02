@@ -1427,7 +1427,35 @@ namespace {
     bool cammyAir = false;
     bool cammyGrab = false;                         // a LP+MP command grab is playing (HP may still upgrade it to OD)
     uint64_t cammyGrabAt = 0, cammyLPAt = 0, cammyMPAt = 0, cammyHPAt = 0;
+    // Cammy (trial): after your qcf / qcb, a down-diagonal slip (↘ after →, ↙ after ←) that starts within 2f
+    // of reaching the forward is sent as the forward; held longer than 2f, the diagonal goes through.
+    int cqfStage = 0; uint8_t cqfH = 0, cqfPrev = 0xFF, cqfFwdH = 0;
+    uint64_t cqfFwdAt = 0, cqfDiagAt = 0;
+    void cammyCleanQcf(Gamepad* gp, uint64_t now) {
+        const uint8_t Dn = GAMEPAD_MASK_DOWN, Lf = GAMEPAD_MASK_LEFT, Rt = GAMEPAD_MASK_RIGHT;
+        uint8_t ad = runSOCDCleaner(Gamepad::resolveSOCDMode(gp->getOptions()), gp->state.dpad);
+        if (ad != cqfPrev) {
+            if (ad == Dn) cqfStage = 1;
+            else if ((ad == (Dn | Lf) || ad == (Dn | Rt)) && cqfStage >= 1) { cqfStage = 2; cqfH = ad & (Lf | Rt); }
+            else if (cqfStage == 2 && ad == cqfH) { cqfFwdAt = now; cqfFwdH = cqfH; cqfStage = 0; }   // qcf / qcb done
+            else if (!(ad == (Dn | Lf) || ad == (Dn | Rt))) cqfStage = 0;
+            cqfPrev = ad;
+        }
+        if (!cqfFwdAt) return;
+        if (ad == (Dn | cqfFwdH)) {
+            if (!cqfDiagAt) {
+                if (now - cqfFwdAt <= 2ULL * FRAME_US) cqfDiagAt = now;   // the slip starts within 2f of the forward
+                else { cqfFwdAt = 0; return; }
+            }
+            if (now - cqfDiagAt <= 2ULL * FRAME_US) gp->state.dpad = cqfFwdH;   // send the forward instead
+            else { cqfFwdAt = 0; cqfDiagAt = 0; }                               // held > 2f: the diagonal is real
+        } else {
+            cqfDiagAt = 0;
+            if (ad != cqfFwdH) cqfFwdAt = 0;
+        }
+    }
     bool cammyProcess(Gamepad* gp, uint64_t now, uint32_t m3, uint32_t m4, bool macroBusy) {
+        if (!V.playing) cammyCleanQcf(gp, now);
         uint32_t pins = (uint32_t)gp->debouncedGpio & (m3 | m4);
         uint32_t rise = pins & ~prevCammyPins;
         prevCammyPins = pins;
