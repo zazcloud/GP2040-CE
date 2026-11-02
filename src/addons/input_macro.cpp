@@ -1552,6 +1552,62 @@ namespace {
         startSeq(now, 0, 0);
         return runSeq(gp, now, prel);
     }
+    // ---------------- pin 27 rule (every profile): press pin 27, then HK within 13f -> on frame 14 from the
+    // pin 27 press: ↓ + HK (Arjin: ↓ + MP) for 2-5f, pin 27 released even if held; then full control back.
+    // The HK pressed in the window never reaches the game (hidden until you let go of it).
+    uint64_t p27At = 0, p27End = 0;
+    bool p27Prev = false, p27Armed = false, p27Firing = false;
+    uint32_t p27HKHide = 0, prevP27Phys = 0;
+    uint32_t buttonMaskForAction(GpioAction a) {
+        switch (a) {
+            case GpioAction::BUTTON_PRESS_B1: return GAMEPAD_MASK_B1;
+            case GpioAction::BUTTON_PRESS_B2: return GAMEPAD_MASK_B2;
+            case GpioAction::BUTTON_PRESS_B3: return GAMEPAD_MASK_B3;
+            case GpioAction::BUTTON_PRESS_B4: return GAMEPAD_MASK_B4;
+            case GpioAction::BUTTON_PRESS_L1: return GAMEPAD_MASK_L1;
+            case GpioAction::BUTTON_PRESS_R1: return GAMEPAD_MASK_R1;
+            case GpioAction::BUTTON_PRESS_L2: return GAMEPAD_MASK_L2;
+            case GpioAction::BUTTON_PRESS_R2: return GAMEPAD_MASK_R2;
+            case GpioAction::BUTTON_PRESS_S1: return GAMEPAD_MASK_S1;
+            case GpioAction::BUTTON_PRESS_S2: return GAMEPAD_MASK_S2;
+            case GpioAction::BUTTON_PRESS_A1: return GAMEPAD_MASK_A1;
+            case GpioAction::BUTTON_PRESS_A2: return GAMEPAD_MASK_A2;
+            case GpioAction::BUTTON_PRESS_L3: return GAMEPAD_MASK_L3;
+            case GpioAction::BUTTON_PRESS_R3: return GAMEPAD_MASK_R3;
+            default: return 0;
+        }
+    }
+    // returns true while it owns the output (the ↓ + HK)
+    bool pin27Process(Gamepad* gp, uint64_t now) {
+        bool p = (gp->debouncedGpio & (1u << 27)) != 0;
+        uint32_t phys = gp->state.buttons;
+        uint32_t rise = phys & ~prevP27Phys;
+        prevP27Phys = phys;
+        if (p && !p27Prev && !p27Firing) { p27At = now; p27Armed = false; }
+        p27Prev = p;
+        p27HKHide &= phys;                          // let go of HK = it works again
+        if (p27At && !p27Firing) {
+            if (now - p27At < 13ULL * FRAME_US) {
+                if (rise & HK) { p27Armed = true; p27HKHide |= HK; }
+            } else if (p27Armed) {                  // frame 14
+                p27Firing = true;
+                p27End = now + randomRange(F10(20), F10(50));
+            } else {
+                p27At = 0;                          // nothing in 13f: full control
+            }
+        }
+        gp->state.buttons &= ~p27HKHide;
+        if (p27Firing) {
+            if (now < p27End) {
+                uint32_t pinBtn = buttonMaskForAction(Storage::getInstance().getProfilePinMappings()[27].action);
+                gp->state.dpad = GAMEPAD_MASK_DOWN;
+                gp->state.buttons = (gp->state.buttons & ~(ATTACK_MASK | pinBtn)) | (arjinActive ? MP : HK);
+                return true;
+            }
+            p27Firing = false; p27Armed = false; p27At = 0;
+        }
+        return false;
+    }
     // ---------------- X turbo (every profile, burnout off): random 1.2-2.2f on / off
     bool xTurboPrev = false, xTurboOn = true;
     uint64_t xTurboNext = 0;
@@ -1991,6 +2047,12 @@ void InputMacro::preprocess()
         prevTogglePin = t;
         if (t) { prevMacroInputPressed = true; return; }   // holding pin 20: no macros
         if (!macrosOn) return;
+    }
+
+    // CUSTOM: pin 27 + HK rule (all profiles)
+    if (pin27Process(gamepad, now)) {
+        prevMacroInputPressed = true;
+        return;
     }
 
     // CUSTOM: remember when each direction was last physically held
