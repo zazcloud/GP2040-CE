@@ -1427,7 +1427,7 @@ namespace {
     bool cammyAir = false;
     bool cammyGrab = false;                         // a LP+MP command grab is playing (HP may still upgrade it to OD)
     uint64_t cammyGrabAt = 0, cammyLPAt = 0, cammyMPAt = 0, cammyHPAt = 0;
-    // Cammy (trial): after your qcf / qcb, a down-diagonal slip (↘ after →, ↙ after ←) that starts within 2f
+    // All profiles: after your qcf / qcb, a down-diagonal slip (↘ after →, ↙ after ←) that starts within 2f
     // of reaching the forward is sent as the forward; held longer than 2f, the diagonal goes through.
     int cqfStage = 0; uint8_t cqfH = 0, cqfPrev = 0xFF, cqfFwdH = 0;
     uint64_t cqfFwdAt = 0, cqfDiagAt = 0;
@@ -1455,7 +1455,6 @@ namespace {
         }
     }
     bool cammyProcess(Gamepad* gp, uint64_t now, uint32_t m3, uint32_t m4, bool macroBusy) {
-        if (!V.playing) cammyCleanQcf(gp, now);
         uint32_t pins = (uint32_t)gp->debouncedGpio & (m3 | m4);
         uint32_t rise = pins & ~prevCammyPins;
         prevCammyPins = pins;
@@ -2082,6 +2081,9 @@ void InputMacro::preprocess()
         prevMacroInputPressed = true;
         return;
     }
+
+    // CUSTOM: all profiles: a ↘/↙ slip right after your qcf/qcb forward is sent as the forward
+    if (!V.playing && !isMacroRunning) cammyCleanQcf(gamepad, now);
 
     // CUSTOM: remember when each direction was last physically held
     trackDirections(gamepad->state.dpad, now);
