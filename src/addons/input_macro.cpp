@@ -40,6 +40,7 @@ volatile bool g_lukeMode         = false;   // Luke profile active (blue LEDs)
 volatile bool g_lilyMode         = false;   // Lily profile active (tiffany LEDs)
 volatile bool g_cammyMode        = false;   // Cammy profile active (cyan LEDs)
 volatile bool g_akiMode          = false;   // Aki profile active (purple LEDs)
+volatile bool g_chunMode         = false;   // Chun-Li profile active (sky blue LEDs)
 volatile uint32_t g_sagatGearMask = 0;      // attack button of the current gear (red LED)
 
 namespace {
@@ -226,6 +227,7 @@ namespace {
     bool lilyActive = false;        // Lily profile (SPD on Macro 5/6, qcb/qcf supers)
     bool cammyActive = false;       // Cammy profile (Sagat gear, kick OD DP, air qcb kick after forward jump)
     bool akiActive = false;         // Aki profile (all six macros run by the Aki engine, ↓HK -> X = Level 1)
+    bool chunActive = false;        // Chun-Li profile (↓↓ kick gear, air qcf kick dive; all six macros run by chunProcess)
     int  profileIdx = 0;            // 0 Sagat, 1 Luke, 2 Cammy, 3 Aki, 4 Lily, 5 Arjin, 6 Manon, 7 stored config (Viper)
     MacroOptions g_pinkOpts;
     MacroOptions g_arjinOpts;
@@ -234,6 +236,11 @@ namespace {
     MacroOptions g_lilyOpts;
     MacroOptions g_cammyOpts;
     MacroOptions g_akiOpts;
+    MacroOptions g_chunOpts;
+    void buildChunOptions() {
+        g_chunOpts = g_sagatOpts;
+        for (int i = 0; i < 6; i++) g_chunOpts.macroList[i].enabled = false;   // all run by the Chun-Li engine
+    }
     void buildAkiOptions() {
         g_akiOpts = g_sagatOpts;
         for (int i = 0; i < 6; i++) g_akiOpts.macroList[i].enabled = false;   // all run by the Aki engine
@@ -1255,7 +1262,7 @@ namespace {
         prevAbs = dpad;
         V.suppress &= phys;                     // released buttons are no longer hidden
         uint8_t prel = toRel(dpad);
-        if (manon && (physRise & PUNCH_MASK) && sawQuarterCircle(now)) lvl3Until = now + 15ULL * FRAME_US;
+        if (manon && (physRise & PUNCH_MASK) && sawQuarterCircle(now)) lvl3Until = now + 23ULL * FRAME_US;
         if (arjinActive) {                      // Arjin: your ↓ ↓ + HK keeps HK held until ↓ or a punch
             // ↓ before frame 18 from the HK: ignored (not sent, does not stop the hold) until you let go of it
             if (arjinHKHold) {
@@ -1408,8 +1415,10 @@ namespace {
             return runSeq(gp, now, prel);
         }
         if (rise & (m3 | m4)) {
-            bool back = (rise & m3) != 0;
-            superArrowsAndFinish({D_, back ? DB : DF, back ? B_ : F_, D_, back ? DB : DF}, back ? B_ : F_, coin() ? LP : HP);
+            // fixed on screen (not the side switch): Macro 3 = ↓↙←↓↙←, Macro 4 = ↓↘→↓↘→ (+ LP / HP)
+            int h = (rise & m3) ? -1 : +1;
+            superArrowsAndFinish({absDir(true, 0), absDir(true, h), absDir(false, h), absDir(true, 0), absDir(true, h)},
+                                 absDir(false, h), coin() ? LP : HP);
             armSpamFromSeq(rise & (m3 | m4), false);
             lilySpd = false;
             startSeq(now, 0, 0);
@@ -1635,6 +1644,91 @@ namespace {
         }
         return false;
     }
+    // ---------------- Chun-Li
+    // Macro 1 / 2 = gear: ↓ N ↓ + gear kick (MK by default; hold a kick + gear button to change it).
+    //   Crouching (↓ or a down-diagonal held): N, ↓, N, ↓ + LK+MK (OD). Macro 1 -> facing right, Macro 2 -> facing left.
+    // Macro 3 = ↓↙←↓↙← + LK/HK, Macro 4 = ↓↘→↓↘→ + LK/HK, Macro 5 = ↓↘→↓↘→ + LP/HP, Macro 6 = ↓↙←↓↙← + LP/HP (fixed).
+    // Dive: diagonal jump, then a kick within 18f = qcf toward the jump + that kick (two kicks within 2f = OD);
+    //   after it the side follows the jump (↗ -> facing right, ↖ -> facing left).
+    uint32_t chunGear = MK, prevChunPins = 0, prevChunPhys = 0, chunKick = 0;
+    uint8_t  prevChunAbs = 0;
+    int      chunJumpDir = 0;
+    uint64_t chunJumpAt = 0, chunKickAt = 0;
+    bool     chunAir = false;
+    bool chunProcess(Gamepad* gp, uint64_t now, const uint32_t* m, bool macroBusy) {
+        uint32_t mask = m[0] | m[1] | m[2] | m[3] | m[4] | m[5];
+        uint32_t pins = (uint32_t)gp->debouncedGpio & mask;
+        uint32_t rise = pins & ~prevChunPins;
+        prevChunPins = pins;
+        uint32_t phys = gp->state.buttons;
+        uint32_t physRise = phys & ~prevChunPhys;
+        prevChunPhys = phys;
+        V.suppress &= phys;
+        uint8_t prel = toRel(gp->state.dpad);
+        uint8_t ad = runSOCDCleaner(Gamepad::resolveSOCDMode(gp->getOptions()), gp->state.dpad);
+        const uint8_t UR = GAMEPAD_MASK_UP | GAMEPAD_MASK_RIGHT, UL = GAMEPAD_MASK_UP | GAMEPAD_MASK_LEFT;
+        bool urNow = (ad & UR) == UR && !(ad & GAMEPAD_MASK_DOWN), ulNow = (ad & UL) == UL && !(ad & GAMEPAD_MASK_DOWN);
+        bool urPrev = (prevChunAbs & UR) == UR, ulPrev = (prevChunAbs & UL) == UL;
+        if (urNow && !urPrev) { chunJumpAt = now; chunJumpDir = +1; }
+        if (ulNow && !ulPrev) { chunJumpAt = now; chunJumpDir = -1; }
+        prevChunAbs = ad;
+        if (V.playing) {
+            if (chunAir) {
+                uint32_t k = physRise & KICK_MASK;
+                if (k && now - chunKickAt <= 2ULL * FRAME_US && V.seqPos < V.seqLen) {   // OD: second kick within 2f
+                    chunKick |= k; V.suppress |= k;
+                    V.seq[V.seqLen - 1].btn = chunKick;
+                }
+            }
+            bool wasAir = chunAir;
+            if (runSeq(gp, now, prel)) return true;
+            if (wasAir && chunJumpDir) { V.facingRight = (chunJumpDir > 0); g_viperFacingRight = V.facingRight; }
+            chunAir = false;
+        }
+        if (macroBusy) return false;
+        uint32_t k = physRise & KICK_MASK;
+        if (k && chunJumpAt && now - chunJumpAt <= 18ULL * FRAME_US) {   // dive (18f window)
+            chunKick = k; chunKickAt = now; chunJumpAt = 0;
+            V.suppress |= k;
+            vClear();
+            auto ar = [](){ return randomRange(F10(12), F10(18)); };
+            int h = chunJumpDir;                    // qcf toward the jump: ↗ -> ↓ ↘ →, ↖ -> ↓ ↙ ←
+            vPush(absDir(true, 0), 0, ar()); vPush(absDir(true, h), 0, ar());
+            vPush(absDir(false, h), chunKick, vBtn());
+            chunAir = true;
+            startSeq(now, 0, 0);
+            return runSeq(gp, now, prel);
+        }
+        if (!rise) return false;
+        if (rise & (m[0] | m[1])) {
+            uint32_t held = phys & KICK_MASK;
+            if (held && popcount32(held) == 1) {    // kick held + gear button = choose the gear kick
+                chunGear = held; V.suppress |= held;
+                return false;
+            }
+            bool crouch = (ad & GAMEPAD_MASK_DOWN) != 0;
+            vClear();
+            if (crouch) vPush(N_, 0, randomRange(F10(10), F10(20)));
+            vPush(D_, 0, randomRange(F10(13), F10(24)));
+            vPush(N_, 0, randomRange(F10(10), F10(20)));
+            vPush(D_, crouch ? (LK | MK) : chunGear, randomRange(F10(20), F10(40)));
+            V.facingRight = (rise & m[0]) != 0;     // Macro 1 -> facing right, Macro 2 -> facing left
+            g_viperFacingRight = V.facingRight;
+            chunAir = false;
+            startSeq(now, 0, 0);
+            return runSeq(gp, now, prel);
+        }
+        int h; uint32_t btn;
+        if      (rise & m[2]) { h = -1; btn = coin() ? LK : HK; }
+        else if (rise & m[3]) { h = +1; btn = coin() ? LK : HK; }
+        else if (rise & m[4]) { h = +1; btn = coin() ? LP : HP; }
+        else if (rise & m[5]) { h = -1; btn = coin() ? LP : HP; }
+        else return false;
+        superArrowsAndFinish({absDir(true, 0), absDir(true, h), absDir(false, h), absDir(true, 0), absDir(true, h)}, absDir(false, h), btn);
+        chunAir = false;
+        startSeq(now, 0, 0);
+        return runSeq(gp, now, prel);
+    }
     // ---------------- X turbo (every profile, burnout off): random 1.2-2.2f on / off
     bool xTurboPrev = false, xTurboOn = true;
     uint64_t xTurboNext = 0;
@@ -1750,6 +1844,8 @@ void InputMacro::setup() {
     buildLilyOptions();
     buildCammyOptions();
     buildAkiOptions();
+    buildChunOptions();
+    chunActive = false; g_chunMode = false;
     akiActive = false; g_akiMode = false;
     cammyActive = false; g_cammyMode = false;
     profileIdx = 0; pinkActive = false; arjinActive = false; lukeActive = false; g_lukeMode = false; lilyActive = false; g_lilyMode = false; g_pinkMode = false; g_profilePic = 0;
@@ -2023,15 +2119,17 @@ void InputMacro::preprocess()
             V.suppress = 0; V.rawPending = false;
             gearPendingMacro = -1;
             spamReset();
-            profileIdx = (profileIdx + 1) % 8;     // Sagat -> Luke -> Cammy -> Aki -> Lily -> Arjin -> Manon -> Viper -> Sagat
-            sagatActive = (profileIdx != 7);
+            profileIdx = (profileIdx + 1) % 9;     // Sagat -> Luke -> Cammy -> Aki -> Chun-Li -> Lily -> Arjin -> Manon -> Viper
+            sagatActive = (profileIdx != 8);
             lukeActive = (profileIdx == 1);
             cammyActive = (profileIdx == 2);
             akiActive = (profileIdx == 3);
-            lilyActive = (profileIdx == 4);
-            arjinActive = (profileIdx == 5);
-            pinkActive = (profileIdx == 6);
-            { static const int pic[8] = {0, 4, 6, 7, 5, 1, 2, 3}; g_profilePic = pic[profileIdx]; }
+            chunActive = (profileIdx == 4);
+            lilyActive = (profileIdx == 5);
+            arjinActive = (profileIdx == 6);
+            pinkActive = (profileIdx == 7);
+            { static const int pic[9] = {0, 4, 6, 7, 8, 5, 1, 2, 3}; g_profilePic = pic[profileIdx]; }
+            g_chunMode = chunActive; chunAir = false; chunJumpAt = 0; chunGear = MK;
             g_akiMode = akiActive; akiHKAt = 0;
             g_cammyMode = cammyActive; cammyAir = false; cammyJumpAt = 0; cammyGrab = false;
             g_lilyMode = lilyActive; lilySpd = false; lilyOD = false;
@@ -2046,9 +2144,10 @@ void InputMacro::preprocess()
                               : (profileIdx == 1) ? &g_lukeOpts
                               : (profileIdx == 2) ? &g_cammyOpts
                               : (profileIdx == 3) ? &g_akiOpts
-                              : (profileIdx == 4) ? &g_lilyOpts
-                              : (profileIdx == 5) ? &g_arjinOpts
-                              : (profileIdx == 6) ? &g_pinkOpts
+                              : (profileIdx == 4) ? &g_chunOpts
+                              : (profileIdx == 5) ? &g_lilyOpts
+                              : (profileIdx == 6) ? &g_arjinOpts
+                              : (profileIdx == 7) ? &g_pinkOpts
                               : &Storage::getInstance().getAddonOptions().macroOptions;
             macrosOn = true;
             detectViperMode(inputMacroOptions);
@@ -2116,6 +2215,13 @@ void InputMacro::preprocess()
         gamepad->state.buttons &= ~V.suppress;   // gear-choice punch stays hidden until released
     }
     if (lukeActive) lukeProcess(gamepad, now);
+    if (chunActive) {
+        if (chunProcess(gamepad, now, (const uint32_t*)macroPinMasks, isMacroRunning)) {
+            prevMacroInputPressed = true;
+            return;
+        }
+        gamepad->state.buttons &= ~V.suppress;   // the dive kick / gear-choice kick stays hidden until released
+    }
     if (akiActive) {
         if (akiProcess(gamepad, now, (const uint32_t*)macroPinMasks, isMacroRunning)) {
             prevMacroInputPressed = true;
@@ -2196,7 +2302,9 @@ void InputMacro::preprocess()
     }
 
     // CUSTOM: tell the LEDs which button the gear is on (Sagat / pink mode)
-    if (pinkActive) {
+    if (chunActive) {
+        g_sagatGearMask = chunGear;
+    } else if (pinkActive) {
         g_sagatGearMask = pinkGear;
     } else if (sagatActive) {
         uint32_t gm = 0;
