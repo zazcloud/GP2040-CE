@@ -1648,7 +1648,7 @@ namespace {
     // Macro 1 / 2 = gear: ↓ N ↓ + gear kick (MK by default; hold a kick + gear button to change it).
     //   Crouching (↓ or a down-diagonal held): N, ↓, N, ↓ + LK+MK (OD). Macro 1 -> facing right, Macro 2 -> facing left.
     // Macro 3 = ↓↙←↓↙← + LK/HK, Macro 4 = ↓↘→↓↘→ + LK/HK, Macro 5 = ↓↘→↓↘→ + LP/HP, Macro 6 = ↓↙←↓↙← + LP/HP (fixed).
-    // Dive: diagonal jump, then a kick within 18f = qcf toward the jump + that kick (two kicks within 2f = OD);
+    // Dive: diagonal jump, then a kick within 23f = qcf toward the jump + that kick (two kicks within 2f = OD);
     //   after it the side follows the jump (↗ -> facing right, ↖ -> facing left).
     uint32_t chunGear = MK, prevChunPins = 0, prevChunPhys = 0, chunKick = 0;
     uint8_t  prevChunAbs = 0;
@@ -1658,6 +1658,8 @@ namespace {
     // HP, then HP again within 12f -> qcb + HP, starting at a random frame 8-12 from the first HP press
     // (a late second HP: between its own frame and 12). The second HP never reaches the game.
     uint64_t chunHPAt = 0, chunHPFireAt = 0;
+    bool     chunHPCrouch = false;                  // first HP was crouching: window 15f, start frames 15-20
+    uint64_t chunDownAt = 0;                        // last time ↓ (or a down-diagonal) was held
     bool chunProcess(Gamepad* gp, uint64_t now, const uint32_t* m, bool macroBusy) {
         uint32_t mask = m[0] | m[1] | m[2] | m[3] | m[4] | m[5];
         uint32_t pins = (uint32_t)gp->debouncedGpio & mask;
@@ -1675,6 +1677,7 @@ namespace {
         if (urNow && !urPrev) { chunJumpAt = now; chunJumpDir = +1; }
         if (ulNow && !ulPrev) { chunJumpAt = now; chunJumpDir = -1; }
         prevChunAbs = ad;
+        if (ad & GAMEPAD_MASK_DOWN) chunDownAt = now;
         if (V.playing) {
             if (chunAir) {
                 uint32_t k = physRise & KICK_MASK;
@@ -1690,13 +1693,16 @@ namespace {
         }
         if (macroBusy) return false;
         if (physRise & HP) {
-            if (chunHPAt && !chunHPFireAt && now - chunHPAt < 12ULL * FRAME_US) {   // second HP inside 12f
+            uint64_t win = chunHPCrouch ? 15ULL : 12ULL;
+            if (chunHPAt && !chunHPFireAt && now - chunHPAt < win * FRAME_US) {   // second HP inside the window
                 V.suppress |= HP;
-                uint64_t lo = chunHPAt + 7ULL * FRAME_US, hi = chunHPAt + 11ULL * FRAME_US;   // frames 8..12
+                uint64_t lo = chunHPAt + (chunHPCrouch ? 14ULL : 7ULL) * FRAME_US;     // frame 15 / 8
+                uint64_t hi = chunHPAt + (chunHPCrouch ? 19ULL : 11ULL) * FRAME_US;    // frame 20 / 12
                 if (lo < now) lo = now;
                 chunHPFireAt = (hi > lo) ? lo + randomRange(0, (uint32_t)(hi - lo)) : now;
             } else if (!chunHPFireAt) {
                 chunHPAt = now;                     // first HP: goes out normally
+                chunHPCrouch = (ad & GAMEPAD_MASK_DOWN) != 0;
             }
         }
         if (chunHPFireAt && now >= chunHPFireAt) {   // qcb + HP (follows the side)
@@ -1710,7 +1716,7 @@ namespace {
             return runSeq(gp, now, prel);
         }
         uint32_t k = physRise & KICK_MASK;
-        if (k && chunJumpAt && now - chunJumpAt <= 18ULL * FRAME_US) {   // dive (18f window)
+        if (k && chunJumpAt && now - chunJumpAt <= 23ULL * FRAME_US) {   // dive (23f window)
             chunKick = k; chunKickAt = now; chunJumpAt = 0;
             V.suppress |= k;
             vClear();
@@ -1730,8 +1736,9 @@ namespace {
                 return false;
             }
             bool crouch = (ad & GAMEPAD_MASK_DOWN) != 0;
+            bool wasCrouch = !crouch && chunDownAt && now - chunDownAt <= 10ULL * FRAME_US;   // let go of ↓ within 10f: N first, no OD
             vClear();
-            if (crouch) vPush(N_, 0, randomRange(F10(10), F10(20)));
+            if (crouch || wasCrouch) vPush(N_, 0, randomRange(F10(10), F10(20)));
             vPush(D_, 0, randomRange(F10(13), F10(24)));
             vPush(N_, 0, randomRange(F10(10), F10(20)));
             vPush(D_, crouch ? (LK | MK) : chunGear, randomRange(F10(20), F10(40)));
@@ -1748,6 +1755,7 @@ namespace {
         else if (rise & m[5]) { h = -1; btn = coin() ? LP : HP; }
         else return false;
         superArrowsAndFinish({absDir(true, 0), absDir(true, h), absDir(false, h), absDir(true, 0), absDir(true, h)}, absDir(false, h), btn);
+        if (rise & (m[2] | m[3])) armSpamFromSeq(rise & (m[2] | m[3]), false);   // supers repeat while held
         chunAir = false;
         startSeq(now, 0, 0);
         return runSeq(gp, now, prel);
@@ -2152,7 +2160,7 @@ void InputMacro::preprocess()
             arjinActive = (profileIdx == 6);
             pinkActive = (profileIdx == 7);
             { static const int pic[9] = {0, 4, 6, 7, 8, 5, 1, 2, 3}; g_profilePic = pic[profileIdx]; }
-            g_chunMode = chunActive; chunAir = false; chunJumpAt = 0; chunGear = MK; chunHPAt = 0; chunHPFireAt = 0;
+            g_chunMode = chunActive; chunAir = false; chunJumpAt = 0; chunGear = MK; chunHPAt = 0; chunHPFireAt = 0; chunDownAt = 0;
             g_akiMode = akiActive; akiHKAt = 0;
             g_cammyMode = cammyActive; cammyAir = false; cammyJumpAt = 0; cammyGrab = false;
             g_lilyMode = lilyActive; lilySpd = false; lilyOD = false;
