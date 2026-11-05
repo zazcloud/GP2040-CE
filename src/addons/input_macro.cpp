@@ -1658,7 +1658,7 @@ namespace {
     // HP, then HP again within 12f -> qcb + HP, starting at a random frame 8-12 from the first HP press
     // (a late second HP: between its own frame and 12). The second HP never reaches the game.
     uint64_t chunHPAt = 0, chunHPFireAt = 0;
-    bool     chunHPCrouch = false;                  // first HP was crouching: window 15f, start frames 15-20
+    bool     chunHPCrouch = false;                  // first HP was crouching: window 18f, start frames 18-23
     uint64_t chunDownAt = 0;                        // last time ↓ (or a down-diagonal) was held
     bool chunProcess(Gamepad* gp, uint64_t now, const uint32_t* m, bool macroBusy) {
         uint32_t mask = m[0] | m[1] | m[2] | m[3] | m[4] | m[5];
@@ -1693,11 +1693,11 @@ namespace {
         }
         if (macroBusy) return false;
         if (physRise & HP) {
-            uint64_t win = chunHPCrouch ? 15ULL : 12ULL;
+            uint64_t win = chunHPCrouch ? 18ULL : 12ULL;
             if (chunHPAt && !chunHPFireAt && now - chunHPAt < win * FRAME_US) {   // second HP inside the window
                 V.suppress |= HP;
-                uint64_t lo = chunHPAt + (chunHPCrouch ? 14ULL : 7ULL) * FRAME_US;     // frame 15 / 8
-                uint64_t hi = chunHPAt + (chunHPCrouch ? 19ULL : 11ULL) * FRAME_US;    // frame 20 / 12
+                uint64_t lo = chunHPAt + (chunHPCrouch ? 17ULL : 7ULL) * FRAME_US;     // frame 18 / 8
+                uint64_t hi = chunHPAt + (chunHPCrouch ? 22ULL : 11ULL) * FRAME_US;    // frame 23 / 12
                 if (lo < now) lo = now;
                 chunHPFireAt = (hi > lo) ? lo + randomRange(0, (uint32_t)(hi - lo)) : now;
             } else if (!chunHPFireAt) {
@@ -1736,7 +1736,7 @@ namespace {
                 return false;
             }
             bool crouch = (ad & GAMEPAD_MASK_DOWN) != 0;
-            bool wasCrouch = !crouch && chunDownAt && now - chunDownAt <= 10ULL * FRAME_US;   // let go of ↓ within 10f: N first, no OD
+            bool wasCrouch = !crouch && chunDownAt && now - chunDownAt <= 13ULL * FRAME_US;   // let go of ↓ within 13f: N first, no OD
             vClear();
             if (crouch || wasCrouch) vPush(N_, 0, randomRange(F10(10), F10(20)));
             vPush(D_, 0, randomRange(F10(13), F10(24)));
