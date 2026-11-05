@@ -1655,6 +1655,9 @@ namespace {
     int      chunJumpDir = 0;
     uint64_t chunJumpAt = 0, chunKickAt = 0;
     bool     chunAir = false;
+    // HP, then HP again within 12f -> qcb + HP, starting at a random frame 8-12 from the first HP press
+    // (a late second HP: between its own frame and 12). The second HP never reaches the game.
+    uint64_t chunHPAt = 0, chunHPFireAt = 0;
     bool chunProcess(Gamepad* gp, uint64_t now, const uint32_t* m, bool macroBusy) {
         uint32_t mask = m[0] | m[1] | m[2] | m[3] | m[4] | m[5];
         uint32_t pins = (uint32_t)gp->debouncedGpio & mask;
@@ -1686,6 +1689,26 @@ namespace {
             chunAir = false;
         }
         if (macroBusy) return false;
+        if (physRise & HP) {
+            if (chunHPAt && !chunHPFireAt && now - chunHPAt < 12ULL * FRAME_US) {   // second HP inside 12f
+                V.suppress |= HP;
+                uint64_t lo = chunHPAt + 7ULL * FRAME_US, hi = chunHPAt + 11ULL * FRAME_US;   // frames 8..12
+                if (lo < now) lo = now;
+                chunHPFireAt = (hi > lo) ? lo + randomRange(0, (uint32_t)(hi - lo)) : now;
+            } else if (!chunHPFireAt) {
+                chunHPAt = now;                     // first HP: goes out normally
+            }
+        }
+        if (chunHPFireAt && now >= chunHPFireAt) {   // qcb + HP (follows the side)
+            chunHPFireAt = 0; chunHPAt = 0;
+            vClear();
+            auto ar = [](){ return randomRange(F10(12), F10(20)); };
+            vPush(D_, 0, ar()); vPush(DB, 0, ar());
+            vPush(B_, HP, vBtn());
+            chunAir = false;
+            startSeq(now, 0, 0);
+            return runSeq(gp, now, prel);
+        }
         uint32_t k = physRise & KICK_MASK;
         if (k && chunJumpAt && now - chunJumpAt <= 18ULL * FRAME_US) {   // dive (18f window)
             chunKick = k; chunKickAt = now; chunJumpAt = 0;
@@ -2129,7 +2152,7 @@ void InputMacro::preprocess()
             arjinActive = (profileIdx == 6);
             pinkActive = (profileIdx == 7);
             { static const int pic[9] = {0, 4, 6, 7, 8, 5, 1, 2, 3}; g_profilePic = pic[profileIdx]; }
-            g_chunMode = chunActive; chunAir = false; chunJumpAt = 0; chunGear = MK;
+            g_chunMode = chunActive; chunAir = false; chunJumpAt = 0; chunGear = MK; chunHPAt = 0; chunHPFireAt = 0;
             g_akiMode = akiActive; akiHKAt = 0;
             g_cammyMode = cammyActive; cammyAir = false; cammyJumpAt = 0; cammyGrab = false;
             g_lilyMode = lilyActive; lilySpd = false; lilyOD = false;
