@@ -1262,7 +1262,7 @@ namespace {
         prevAbs = dpad;
         V.suppress &= phys;                     // released buttons are no longer hidden
         uint8_t prel = toRel(dpad);
-        if (manon && (physRise & PUNCH_MASK) && sawQuarterCircle(now)) lvl3Until = now + 23ULL * FRAME_US;
+        if (manon && (physRise & PUNCH_MASK) && sawQuarterCircle(now)) lvl3Until = now + 30ULL * FRAME_US;
         if (arjinActive) {                      // Arjin: your ↓ ↓ + HK keeps HK held until ↓ or a punch
             // ↓ before frame 18 from the HK: ignored (not sent, does not stop the hold) until you let go of it
             if (arjinHKHold) {
@@ -1662,7 +1662,7 @@ namespace {
     uint64_t chunDownAt = 0;                        // last time ↓ (or a down-diagonal) was held
     // crouch MP, then MP again within 12f -> qcb + HP starting at a random frame 8-12 from the first MP
     uint64_t chunMPAt = 0;
-    // → / ← + HK, then HK again within 18f -> qcb + HP starting at a random frame 18-23 from the first HK
+    // standing / → / ← + HK, then HK again within 18f -> qcb + HP starting at a random frame 18-23 from the first HK
     uint64_t chunHKAt = 0;
     bool chunProcess(Gamepad* gp, uint64_t now, const uint32_t* m, bool macroBusy) {
         uint32_t mask = m[0] | m[1] | m[2] | m[3] | m[4] | m[5];
@@ -1728,8 +1728,8 @@ namespace {
                 chunHPFireAt = (hi > lo) ? lo + randomRange(0, (uint32_t)(hi - lo)) : now;
                 chunHKAt = 0;
             } else {
-                bool horiz = (ad & (GAMEPAD_MASK_LEFT | GAMEPAD_MASK_RIGHT)) && !(ad & (GAMEPAD_MASK_UP | GAMEPAD_MASK_DOWN));
-                chunHKAt = horiz ? now : 0;         // only → + HK or ← + HK starts it
+                bool standing = !(ad & (GAMEPAD_MASK_UP | GAMEPAD_MASK_DOWN));
+                chunHKAt = standing ? now : 0;      // standing HK, → + HK or ← + HK starts it
             }
         }
         if (chunHPFireAt && now >= chunHPFireAt) {   // qcb + HP (follows the side)
