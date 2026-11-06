@@ -1660,6 +1660,8 @@ namespace {
     uint64_t chunHPAt = 0, chunHPFireAt = 0;
     bool     chunHPCrouch = false;                  // first HP was crouching: window 18f, start frames 18-23
     uint64_t chunDownAt = 0;                        // last time ↓ (or a down-diagonal) was held
+    // crouch MP, then MP again within 12f -> qcb + HP starting at a random frame 8-12 from the first MP
+    uint64_t chunMPAt = 0;
     bool chunProcess(Gamepad* gp, uint64_t now, const uint32_t* m, bool macroBusy) {
         uint32_t mask = m[0] | m[1] | m[2] | m[3] | m[4] | m[5];
         uint32_t pins = (uint32_t)gp->debouncedGpio & mask;
@@ -1705,8 +1707,19 @@ namespace {
                 chunHPCrouch = (ad & GAMEPAD_MASK_DOWN) != 0;
             }
         }
+        if (physRise & MP) {
+            if (chunMPAt && !chunHPFireAt && now - chunMPAt < 12ULL * FRAME_US) {   // second MP inside 12f
+                V.suppress |= MP;
+                uint64_t lo = chunMPAt + 7ULL * FRAME_US, hi = chunMPAt + 11ULL * FRAME_US;   // frames 8..12
+                if (lo < now) lo = now;
+                chunHPFireAt = (hi > lo) ? lo + randomRange(0, (uint32_t)(hi - lo)) : now;
+                chunMPAt = 0;
+            } else {
+                chunMPAt = (ad & GAMEPAD_MASK_DOWN) ? now : 0;   // only a crouching MP starts it
+            }
+        }
         if (chunHPFireAt && now >= chunHPFireAt) {   // qcb + HP (follows the side)
-            chunHPFireAt = 0; chunHPAt = 0;
+            chunHPFireAt = 0; chunHPAt = 0; chunMPAt = 0;
             vClear();
             auto ar = [](){ return randomRange(F10(12), F10(20)); };
             vPush(D_, 0, ar()); vPush(DB, 0, ar());
@@ -1736,9 +1749,9 @@ namespace {
                 return false;
             }
             bool crouch = (ad & GAMEPAD_MASK_DOWN) != 0;
-            bool wasCrouch = !crouch && chunDownAt && now - chunDownAt <= 13ULL * FRAME_US;   // let go of ↓ within 13f: N first, no OD
+            bool walking = !crouch && (ad & (GAMEPAD_MASK_LEFT | GAMEPAD_MASK_RIGHT)) != 0;   // walking ← / →: N first, no OD
             vClear();
-            if (crouch || wasCrouch) vPush(N_, 0, randomRange(F10(10), F10(20)));
+            if (crouch || walking) vPush(N_, 0, randomRange(F10(10), F10(20)));
             vPush(D_, 0, randomRange(F10(13), F10(24)));
             vPush(N_, 0, randomRange(F10(10), F10(20)));
             vPush(D_, crouch ? (LK | MK) : chunGear, randomRange(F10(20), F10(40)));
@@ -2160,7 +2173,7 @@ void InputMacro::preprocess()
             arjinActive = (profileIdx == 6);
             pinkActive = (profileIdx == 7);
             { static const int pic[9] = {0, 4, 6, 7, 8, 5, 1, 2, 3}; g_profilePic = pic[profileIdx]; }
-            g_chunMode = chunActive; chunAir = false; chunJumpAt = 0; chunGear = MK; chunHPAt = 0; chunHPFireAt = 0; chunDownAt = 0;
+            g_chunMode = chunActive; chunAir = false; chunJumpAt = 0; chunGear = MK; chunHPAt = 0; chunHPFireAt = 0; chunDownAt = 0; chunMPAt = 0;
             g_akiMode = akiActive; akiHKAt = 0;
             g_cammyMode = cammyActive; cammyAir = false; cammyJumpAt = 0; cammyGrab = false;
             g_lilyMode = lilyActive; lilySpd = false; lilyOD = false;
