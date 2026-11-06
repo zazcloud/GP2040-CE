@@ -1662,6 +1662,8 @@ namespace {
     uint64_t chunDownAt = 0;                        // last time ↓ (or a down-diagonal) was held
     // crouch MP, then MP again within 12f -> qcb + HP starting at a random frame 8-12 from the first MP
     uint64_t chunMPAt = 0;
+    // → / ← + HK, then HK again within 18f -> qcb + HP starting at a random frame 18-23 from the first HK
+    uint64_t chunHKAt = 0;
     bool chunProcess(Gamepad* gp, uint64_t now, const uint32_t* m, bool macroBusy) {
         uint32_t mask = m[0] | m[1] | m[2] | m[3] | m[4] | m[5];
         uint32_t pins = (uint32_t)gp->debouncedGpio & mask;
@@ -1718,8 +1720,20 @@ namespace {
                 chunMPAt = (ad & GAMEPAD_MASK_DOWN) ? now : 0;   // only a crouching MP starts it
             }
         }
+        if (physRise & HK) {
+            if (chunHKAt && !chunHPFireAt && now - chunHKAt < 18ULL * FRAME_US) {   // second HK inside 18f
+                V.suppress |= HK;
+                uint64_t lo = chunHKAt + 17ULL * FRAME_US, hi = chunHKAt + 22ULL * FRAME_US;   // frames 18..23
+                if (lo < now) lo = now;
+                chunHPFireAt = (hi > lo) ? lo + randomRange(0, (uint32_t)(hi - lo)) : now;
+                chunHKAt = 0;
+            } else {
+                bool horiz = (ad & (GAMEPAD_MASK_LEFT | GAMEPAD_MASK_RIGHT)) && !(ad & (GAMEPAD_MASK_UP | GAMEPAD_MASK_DOWN));
+                chunHKAt = horiz ? now : 0;         // only → + HK or ← + HK starts it
+            }
+        }
         if (chunHPFireAt && now >= chunHPFireAt) {   // qcb + HP (follows the side)
-            chunHPFireAt = 0; chunHPAt = 0; chunMPAt = 0;
+            chunHPFireAt = 0; chunHPAt = 0; chunMPAt = 0; chunHKAt = 0;
             vClear();
             auto ar = [](){ return randomRange(F10(12), F10(20)); };
             vPush(D_, 0, ar()); vPush(DB, 0, ar());
@@ -2173,7 +2187,7 @@ void InputMacro::preprocess()
             arjinActive = (profileIdx == 6);
             pinkActive = (profileIdx == 7);
             { static const int pic[9] = {0, 4, 6, 7, 8, 5, 1, 2, 3}; g_profilePic = pic[profileIdx]; }
-            g_chunMode = chunActive; chunAir = false; chunJumpAt = 0; chunGear = MK; chunHPAt = 0; chunHPFireAt = 0; chunDownAt = 0; chunMPAt = 0;
+            g_chunMode = chunActive; chunAir = false; chunJumpAt = 0; chunGear = MK; chunHPAt = 0; chunHPFireAt = 0; chunDownAt = 0; chunMPAt = 0; chunHKAt = 0;
             g_akiMode = akiActive; akiHKAt = 0;
             g_cammyMode = cammyActive; cammyAir = false; cammyJumpAt = 0; cammyGrab = false;
             g_lilyMode = lilyActive; lilySpd = false; lilyOD = false;
