@@ -1566,7 +1566,7 @@ namespace {
             if (runSeq(gp, now, prel)) return true;
         }
         if (macroBusy) return false;
-        if ((physRise & XBTN) && !g_sagatBurnout && akiHKAt && now - akiHKAt <= 20ULL * FRAME_US) {
+        if ((physRise & XBTN) && !g_sagatBurnout && akiHKAt && now - akiHKAt <= (ingridActive ? 44ULL : 20ULL) * FRAME_US) {   // Ingrid 44f, Aki 20f
             akiHKAt = 0;
             V.suppress |= XBTN;                 // X stays hidden until you let go of it
             seqSagatLevel1(true);               // qcf qcf + LK / HK
