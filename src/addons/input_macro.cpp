@@ -2198,6 +2198,8 @@ void InputMacro::preprocess()
             g_pinkMode = pinkActive;
             cgrab = false; pinkHKHold = false; pinkHoldAfter = false;
             for (int i = 0; i < MAX_MACRO_LIMIT; i++) gearMask[i] = 0;
+            if (cammyActive) { gearMask[0] = LK; gearMask[1] = LK; }   // Cammy DP gear starts on LK
+            if (lilyActive)  { gearMask[0] = MP; gearMask[1] = MP; }   // Lily DP gear starts on MP
             inputMacroOptions = (profileIdx == 0) ? &g_sagatOpts
                               : (profileIdx == 1) ? &g_lukeOpts
                               : (profileIdx == 2) ? &g_cammyOpts
