@@ -41,6 +41,7 @@ volatile bool g_lilyMode         = false;   // Lily profile active (tiffany LEDs
 volatile bool g_cammyMode        = false;   // Cammy profile active (cyan LEDs)
 volatile bool g_akiMode          = false;   // Aki profile active (purple LEDs)
 volatile bool g_chunMode         = false;   // Chun-Li profile active (sky blue LEDs)
+volatile bool g_ingridMode       = false;   // Ingrid profile active (lavender LEDs)
 volatile uint32_t g_sagatGearMask = 0;      // attack button of the current gear (red LED)
 
 namespace {
@@ -227,6 +228,7 @@ namespace {
     bool lilyActive = false;        // Lily profile (SPD on Macro 5/6, qcb/qcf supers)
     bool cammyActive = false;       // Cammy profile (Sagat gear, kick OD DP, air qcb kick after forward jump)
     bool akiActive = false;         // Aki profile (all six macros run by the Aki engine, ↓HK -> X = Level 1)
+    bool ingridActive = false;      // Ingrid profile (Aki engine: qcf/qcb + LK, punch supers, standing HK -> X = Level 1)
     bool chunActive = false;        // Chun-Li profile (↓↓ kick gear, air qcf kick dive; all six macros run by chunProcess)
     int  profileIdx = 0;            // 0 Sagat, 1 Luke, 2 Cammy, 3 Aki, 4 Lily, 5 Arjin, 6 Manon, 7 stored config (Viper)
     MacroOptions g_pinkOpts;
@@ -237,6 +239,7 @@ namespace {
     MacroOptions g_cammyOpts;
     MacroOptions g_akiOpts;
     MacroOptions g_chunOpts;
+    MacroOptions g_ingridOpts;
     void buildChunOptions() {
         g_chunOpts = g_sagatOpts;
         for (int i = 0; i < 6; i++) g_chunOpts.macroList[i].enabled = false;   // all run by the Chun-Li engine
@@ -1556,7 +1559,9 @@ namespace {
         V.suppress &= phys;
         uint8_t prel = toRel(gp->state.dpad);
         uint8_t ad = runSOCDCleaner(Gamepad::resolveSOCDMode(gp->getOptions()), gp->state.dpad);
-        if ((physRise & HK) && (ad & GAMEPAD_MASK_DOWN)) akiHKAt = now;   // your ↓ + HK
+        // Aki: your ↓ + HK. Ingrid: your HK standing or walking (no ↑ / ↓).
+        bool hkOk = ingridActive ? !(ad & (GAMEPAD_MASK_UP | GAMEPAD_MASK_DOWN)) : (ad & GAMEPAD_MASK_DOWN) != 0;
+        if ((physRise & HK) && hkOk) akiHKAt = now;
         if (V.playing) {
             if (runSeq(gp, now, prel)) return true;
         }
@@ -1576,10 +1581,11 @@ namespace {
             int h = (rise & m[0]) ? +1 : -1;
             vClear();
             vPush(dn(), 0, ar()); vPush(absDir(true, h), 0, ar());
-            vPush(absDir(false, h), HP, vBtn());
-        } else if (rise & (m[2] | m[3])) {      // supers: ↓ ↘ → ↓ ↘ → / ↓ ↙ ← ↓ ↙ ← + HP
+            vPush(absDir(false, h), ingridActive ? LK : HP, vBtn());   // Ingrid: + LK
+        } else if (rise & (m[2] | m[3])) {      // supers: ↓ ↘ → ↓ ↘ → / ↓ ↙ ← ↓ ↙ ← + HP (Ingrid: LP / HP random)
             int h = (rise & m[2]) ? +1 : -1;
-            superArrowsAndFinish({dn(), absDir(true, h), absDir(false, h), dn(), absDir(true, h)}, absDir(false, h), HP);
+            superArrowsAndFinish({dn(), absDir(true, h), absDir(false, h), dn(), absDir(true, h)}, absDir(false, h),
+                                 ingridActive ? (coin() ? LP : HP) : HP);
             armSpamFromSeq(rise & (m[2] | m[3]), false);
         } else if (rise & (m[4] | m[5])) {      // ↓ ↘ → ↓ ↘ → / ↓ ↙ ← ↓ ↙ ← + LK / HK
             int h = (rise & m[4]) ? +1 : -1;
@@ -1818,7 +1824,7 @@ namespace {
         if (g_sagatBurnout) {
             gp->state.buttons &= ~XBTN;           // X never reaches the game in burnout
             if (xRising && !macroBusy) {
-                seqSagatLevel1(pinkActive || arjinActive || cammyActive || akiActive, lilyActive); startSeq(now, 0, 0);
+                seqSagatLevel1(pinkActive || arjinActive || cammyActive || akiActive || ingridActive, lilyActive); startSeq(now, 0, 0);
                 armSpamFromSeq(0, true);
                 if (runSeq(gp, now, toRel(gp->state.dpad))) return true;
             }
@@ -1903,6 +1909,8 @@ void InputMacro::setup() {
     buildCammyOptions();
     buildAkiOptions();
     buildChunOptions();
+    g_ingridOpts = g_akiOpts;                       // all six macros run by the Aki engine
+    ingridActive = false; g_ingridMode = false;
     chunActive = false; g_chunMode = false;
     akiActive = false; g_akiMode = false;
     cammyActive = false; g_cammyMode = false;
@@ -2177,16 +2185,18 @@ void InputMacro::preprocess()
             V.suppress = 0; V.rawPending = false;
             gearPendingMacro = -1;
             spamReset();
-            profileIdx = (profileIdx + 1) % 9;     // Sagat -> Luke -> Cammy -> Aki -> Chun-Li -> Lily -> Arjin -> Manon -> Viper
-            sagatActive = (profileIdx != 8);
+            profileIdx = (profileIdx + 1) % 10;    // Sagat -> Luke -> Cammy -> Aki -> Chun-Li -> Ingrid -> Lily -> Arjin -> Manon -> Viper
+            sagatActive = (profileIdx != 9);
             lukeActive = (profileIdx == 1);
             cammyActive = (profileIdx == 2);
             akiActive = (profileIdx == 3);
             chunActive = (profileIdx == 4);
-            lilyActive = (profileIdx == 5);
-            arjinActive = (profileIdx == 6);
-            pinkActive = (profileIdx == 7);
-            { static const int pic[9] = {0, 4, 6, 7, 8, 5, 1, 2, 3}; g_profilePic = pic[profileIdx]; }
+            ingridActive = (profileIdx == 5);
+            lilyActive = (profileIdx == 6);
+            arjinActive = (profileIdx == 7);
+            pinkActive = (profileIdx == 8);
+            { static const int pic[10] = {0, 4, 6, 7, 8, 9, 5, 1, 2, 3}; g_profilePic = pic[profileIdx]; }
+            g_ingridMode = ingridActive;
             g_chunMode = chunActive; chunAir = false; chunJumpAt = 0; chunGear = MK; chunHPAt = 0; chunHPFireAt = 0; chunDownAt = 0; chunMPAt = 0; chunHKAt = 0;
             g_akiMode = akiActive; akiHKAt = 0;
             g_cammyMode = cammyActive; cammyAir = false; cammyJumpAt = 0; cammyGrab = false;
@@ -2205,9 +2215,10 @@ void InputMacro::preprocess()
                               : (profileIdx == 2) ? &g_cammyOpts
                               : (profileIdx == 3) ? &g_akiOpts
                               : (profileIdx == 4) ? &g_chunOpts
-                              : (profileIdx == 5) ? &g_lilyOpts
-                              : (profileIdx == 6) ? &g_arjinOpts
-                              : (profileIdx == 7) ? &g_pinkOpts
+                              : (profileIdx == 5) ? &g_ingridOpts
+                              : (profileIdx == 6) ? &g_lilyOpts
+                              : (profileIdx == 7) ? &g_arjinOpts
+                              : (profileIdx == 8) ? &g_pinkOpts
                               : &Storage::getInstance().getAddonOptions().macroOptions;
             macrosOn = true;
             detectViperMode(inputMacroOptions);
@@ -2282,7 +2293,7 @@ void InputMacro::preprocess()
         }
         gamepad->state.buttons &= ~V.suppress;   // the dive kick / gear-choice kick stays hidden until released
     }
-    if (akiActive) {
+    if (akiActive || ingridActive) {
         if (akiProcess(gamepad, now, (const uint32_t*)macroPinMasks, isMacroRunning)) {
             prevMacroInputPressed = true;
             return;
