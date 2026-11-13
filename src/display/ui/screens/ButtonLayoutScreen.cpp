@@ -265,8 +265,8 @@ void ButtonLayoutScreen::generateHeader() {
 void ButtonLayoutScreen::drawScreen() {
     // CUSTOM: each macro profile shows its own picture the whole time
     if (g_profilePic >= 0) {
-        const uint8_t* pic = (g_profilePic == 0) ? PIC_SAGAT : (g_profilePic == 1) ? PIC_ARJIN : (g_profilePic == 4) ? PIC_LUKE : (g_profilePic == 5) ? PIC_LILY : (g_profilePic == 6) ? PIC_CAMMY : (g_profilePic == 7) ? PIC_AKI : (g_profilePic == 8) ? PIC_CHUN : (g_profilePic == 9) ? PIC_INGRID : (g_profilePic == 10) ? PIC_KIMBERLY : (g_profilePic == 11) ? PIC_JAMIE
-                           : (g_profilePic == 2) ? PIC_MANON : (const uint8_t*)Storage::getInstance().getDisplayOptions().splashImage.bytes;
+        const uint8_t* pic = profilePicture(g_profilePic);
+        if (!pic) pic = (const uint8_t*)Storage::getInstance().getDisplayOptions().splashImage.bytes;
         getRenderer()->clearScreen();
         getRenderer()->drawSprite((uint8_t*)pic, 128, 64, 16, 0, 0, 1);
         return;

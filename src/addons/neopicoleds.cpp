@@ -22,15 +22,8 @@ extern volatile bool g_viperFacingRight;
 extern volatile bool g_viperBurnout;
 extern volatile bool g_sagatMode;
 extern volatile bool g_sagatBurnout;
-extern volatile bool g_pinkMode;
-extern volatile bool g_lukeMode;
-extern volatile bool g_lilyMode;
-extern volatile bool g_cammyMode;
-extern volatile bool g_akiMode;
-extern volatile bool g_chunMode;
-extern volatile bool g_ingridMode;
-extern volatile bool g_kimMode;
-extern volatile bool g_jamieMode;
+extern volatile uint32_t g_ledBase, g_ledBurn;   // current built-in profile's colours (0xRRGGBB)
+extern volatile bool g_ledRainbow;               // Kimberly: fixed rainbow, a little dimmer
 extern volatile uint32_t g_sagatGearMask;
 
 // CUSTOM: the LED under each physical button follows the board's original wiring
@@ -649,11 +642,9 @@ void NeoPicoLEDAddon::process() {
     // CUSTOM: Sagat mode colors (half brightness): light yellow (orange in burnout),
     // gear button red, side arrow white
     if (g_sagatMode && !g_viperActive) {
-        float bx = as.GetBrightnessX() * (g_kimMode ? 0.18f : 0.25f);  // 50% dimmer than before (Kimberly a little dimmer)
+        float bx = as.GetBrightnessX() * (g_ledRainbow ? 0.18f : 0.25f);  // 50% dimmer than before (Kimberly a little dimmer)
         LEDFormat fmt = neopico.GetFormat();
-        RGB baseRgb = g_sagatBurnout
-            ? (g_kimMode ? RGB(128, 128, 128) : g_jamieMode ? RGB(128, 128, 128) : g_pinkMode ? RGB(150, 0, 255) : g_lukeMode ? RGB(0, 30, 255) : g_lilyMode ? RGB(0, 95, 90) : g_cammyMode ? RGB(0, 80, 110) : g_akiMode ? RGB(70, 0, 110) : g_chunMode ? RGB(0, 60, 255) : g_ingridMode ? RGB(230, 215, 255) : RGB(255, 120, 0))      // Luke burnout dark blue, Lily darker tiffany
-            : (g_jamieMode ? RGB(255, 220, 0) : g_pinkMode ? RGB(255, 60, 160) : g_lukeMode ? RGB(90, 200, 255) : g_lilyMode ? RGB(10, 186, 181) : g_cammyMode ? RGB(0, 255, 255) : g_akiMode ? RGB(170, 60, 255) : g_chunMode ? RGB(135, 206, 250) : g_ingridMode ? RGB(181, 126, 220) : RGB(255, 235, 140)); // Luke light blue, Lily tiffany
+        RGB baseRgb = RGB((uint32_t)(g_sagatBurnout ? g_ledBurn : g_ledBase));
         uint32_t base  = baseRgb.value(fmt, bx);
         uint32_t red   = RGB(255, 0, 0).value(fmt, bx);
         uint32_t white = RGB(255, 255, 255).value(fmt, bx);
@@ -667,7 +658,7 @@ void NeoPicoLEDAddon::process() {
                     if (pos < 100) frame[pos] = c;
             }
         }
-        if (g_kimMode && !g_sagatBurnout) {     // Kimberly: fixed rainbow, one colour per button
+        if (g_ledRainbow && !g_sagatBurnout) {     // Kimberly: fixed rainbow, one colour per button
             int total = 0, n = 0;
             for (auto &row : matrix.pixels)
                 for (auto &pixel : row)

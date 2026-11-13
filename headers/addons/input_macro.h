@@ -46,6 +46,7 @@ private:
     void checkMacroAction();
     void runCurrentMacro();
     void reset();
+    void mapMacroPins();
     void restart(Macro& macro);
     bool isMacroRunning;
     bool isMacroTriggerHeld;

@@ -21,20 +21,7 @@ void SplashScreen::drawScreen() {
 		getRenderer()->drawText(0, 4, " Splash NOT enabled.");
     } else {
             // CUSTOM: show the current macro profile's picture (Viper = stored splash)
-            const uint8_t* pic = nullptr;
-            if (!configMode) {
-                if (g_profilePic == 0) pic = PIC_SAGAT;
-                else if (g_profilePic == 1) pic = PIC_ARJIN;
-                else if (g_profilePic == 2) pic = PIC_MANON;
-                else if (g_profilePic == 4) pic = PIC_LUKE;
-                else if (g_profilePic == 5) pic = PIC_LILY;
-                else if (g_profilePic == 6) pic = PIC_CAMMY;
-                else if (g_profilePic == 7) pic = PIC_AKI;
-                else if (g_profilePic == 8) pic = PIC_CHUN;
-                else if (g_profilePic == 9) pic = PIC_INGRID;
-                else if (g_profilePic == 10) pic = PIC_KIMBERLY;
-                else if (g_profilePic == 11) pic = PIC_JAMIE;
-            }
+            const uint8_t* pic = configMode ? nullptr : profilePicture(g_profilePic);
             getRenderer()->clearScreen();
             if (pic) getRenderer()->drawSprite((uint8_t*) pic, 128, 64, 16, 0, 0, 1);
             else getRenderer()->drawSprite((uint8_t*) getDisplayOptions().splashImage.bytes, 128, 64, 16, 0, 0, 1);

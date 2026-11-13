@@ -34,16 +34,10 @@ volatile bool g_viperFacingRight = true;   // true = player 1 side (left)
 volatile bool g_viperBurnout     = false;
 volatile bool g_sagatMode        = false;   // built-in Sagat macro set active (LEDs light yellow)
 volatile bool g_sagatBurnout     = false;   // Sagat burnout (orange LEDs, X = Level 1)
-volatile bool g_pinkMode         = false;   // Manon profile active (pink LEDs)
 volatile int  g_profilePic       = 0;       // screen picture: 0 Sagat, 1 Arjin, 2 Manon, 3 Viper (stored splash), 4 Luke, 5 Lily, 6 Cammy, 7 Aki, 8 Chun-Li, 9 Ingrid, 10 Kimberly, 11 Jamie
-volatile bool g_lukeMode         = false;   // Luke profile active (blue LEDs)
-volatile bool g_lilyMode         = false;   // Lily profile active (tiffany LEDs)
-volatile bool g_cammyMode        = false;   // Cammy profile active (cyan LEDs)
-volatile bool g_akiMode          = false;   // Aki profile active (purple LEDs)
-volatile bool g_chunMode         = false;   // Chun-Li profile active (sky blue LEDs)
-volatile bool g_ingridMode       = false;   // Ingrid profile active (lavender LEDs)
-volatile bool g_jamieMode        = false;   // Jamie profile active (yellow LEDs, grey in burnout)
-volatile bool g_kimMode          = false;   // Kimberly profile active (rainbow LEDs, grey in burnout)
+volatile uint32_t g_ledBase      = 0xFFEB8C; // built-in profile LED colour (0xRRGGBB)
+volatile uint32_t g_ledBurn      = 0xFF7800; // ... and its burnout colour
+volatile bool g_ledRainbow       = false;    // Kimberly: fixed rainbow (a little dimmer) instead of g_ledBase
 volatile uint32_t g_sagatGearMask = 0;      // attack button of the current gear (red LED)
 
 namespace {
@@ -150,77 +144,34 @@ namespace {
 
     // CUSTOM: Sagat macro set (from final.gp2040), built into the firmware
     MacroOptions g_sagatOpts;
+    struct SagatStep  { uint32_t mask, dur; };          // dur in microseconds, no wait after any step
+    struct SagatMacro { const char* label; uint8_t n; SagatStep s[6]; };
+    const SagatMacro SAGAT_MACROS[6] = {
+        {"G DP right",   3, {{524288u, 24999u}, {655360u, 23332u}, {525312u, 33332u}}},
+        {"G DP left",    3, {{262144u, 23332u}, {393216u, 23332u}, {263168u, 49998u}}},
+        {"super right ", 6, {{131072u, 39996u}, {655360u, 24165u}, {524288u, 24999u}, {131072u, 23332u}, {655360u, 23330u}, {524416u, 39996u}}},
+        {"super left ",  6, {{131072u, 23330u}, {393216u, 24999u}, {262144u, 24999u}, {131072u, 23330u}, {393216u, 39996u}, {262272u, 56662u}}},
+        {"dp right o",   4, {{524288u, 26664u}, {655360u, 23332u}, {525344u, 39996u}, {393216u, 73328u}}},
+        {"dp left oo",   4, {{262144u, 39996u}, {393216u, 23330u}, {263200u, 56662u}, {655360u, 123326u}}},
+    };
     void buildSagatOptions() {
         MacroOptions& o = g_sagatOpts;
         memset(&o, 0, sizeof(o));
         o.has_enabled = true; o.enabled = true; o.macroList_count = 6;
-        { Macro& m = o.macroList[0];
-          m.has_enabled = true; m.enabled = true; m.has_exclusive = true; m.exclusive = true;
-          m.has_interruptible = true; m.interruptible = false; m.has_showFrames = true; m.showFrames = true;
-          m.has_macroType = true; m.macroType = (MacroType)1; m.has_useMacroTriggerButton = true; m.useMacroTriggerButton = false;
-          m.has_macroLabel = true; strncpy(m.macroLabel, "G DP right", sizeof(m.macroLabel) - 1);
-          m.macroInputs_count = 3;
-          m.macroInputs[0].has_buttonMask = true; m.macroInputs[0].buttonMask = 524288u; m.macroInputs[0].has_duration = true; m.macroInputs[0].duration = 24999u; m.macroInputs[0].has_waitDuration = true; m.macroInputs[0].waitDuration = 0u;
-          m.macroInputs[1].has_buttonMask = true; m.macroInputs[1].buttonMask = 655360u; m.macroInputs[1].has_duration = true; m.macroInputs[1].duration = 23332u; m.macroInputs[1].has_waitDuration = true; m.macroInputs[1].waitDuration = 0u;
-          m.macroInputs[2].has_buttonMask = true; m.macroInputs[2].buttonMask = 525312u; m.macroInputs[2].has_duration = true; m.macroInputs[2].duration = 33332u; m.macroInputs[2].has_waitDuration = true; m.macroInputs[2].waitDuration = 0u;
-        }
-        { Macro& m = o.macroList[1];
-          m.has_enabled = true; m.enabled = true; m.has_exclusive = true; m.exclusive = true;
-          m.has_interruptible = true; m.interruptible = false; m.has_showFrames = true; m.showFrames = true;
-          m.has_macroType = true; m.macroType = (MacroType)1; m.has_useMacroTriggerButton = true; m.useMacroTriggerButton = false;
-          m.has_macroLabel = true; strncpy(m.macroLabel, "G DP left", sizeof(m.macroLabel) - 1);
-          m.macroInputs_count = 3;
-          m.macroInputs[0].has_buttonMask = true; m.macroInputs[0].buttonMask = 262144u; m.macroInputs[0].has_duration = true; m.macroInputs[0].duration = 23332u; m.macroInputs[0].has_waitDuration = true; m.macroInputs[0].waitDuration = 0u;
-          m.macroInputs[1].has_buttonMask = true; m.macroInputs[1].buttonMask = 393216u; m.macroInputs[1].has_duration = true; m.macroInputs[1].duration = 23332u; m.macroInputs[1].has_waitDuration = true; m.macroInputs[1].waitDuration = 0u;
-          m.macroInputs[2].has_buttonMask = true; m.macroInputs[2].buttonMask = 263168u; m.macroInputs[2].has_duration = true; m.macroInputs[2].duration = 49998u; m.macroInputs[2].has_waitDuration = true; m.macroInputs[2].waitDuration = 0u;
-        }
-        { Macro& m = o.macroList[2];
-          m.has_enabled = true; m.enabled = true; m.has_exclusive = true; m.exclusive = true;
-          m.has_interruptible = true; m.interruptible = false; m.has_showFrames = true; m.showFrames = true;
-          m.has_macroType = true; m.macroType = (MacroType)1; m.has_useMacroTriggerButton = true; m.useMacroTriggerButton = false;
-          m.has_macroLabel = true; strncpy(m.macroLabel, "super right ", sizeof(m.macroLabel) - 1);
-          m.macroInputs_count = 6;
-          m.macroInputs[0].has_buttonMask = true; m.macroInputs[0].buttonMask = 131072u; m.macroInputs[0].has_duration = true; m.macroInputs[0].duration = 39996u; m.macroInputs[0].has_waitDuration = true; m.macroInputs[0].waitDuration = 0u;
-          m.macroInputs[1].has_buttonMask = true; m.macroInputs[1].buttonMask = 655360u; m.macroInputs[1].has_duration = true; m.macroInputs[1].duration = 24165u; m.macroInputs[1].has_waitDuration = true; m.macroInputs[1].waitDuration = 0u;
-          m.macroInputs[2].has_buttonMask = true; m.macroInputs[2].buttonMask = 524288u; m.macroInputs[2].has_duration = true; m.macroInputs[2].duration = 24999u; m.macroInputs[2].has_waitDuration = true; m.macroInputs[2].waitDuration = 0u;
-          m.macroInputs[3].has_buttonMask = true; m.macroInputs[3].buttonMask = 131072u; m.macroInputs[3].has_duration = true; m.macroInputs[3].duration = 23332u; m.macroInputs[3].has_waitDuration = true; m.macroInputs[3].waitDuration = 0u;
-          m.macroInputs[4].has_buttonMask = true; m.macroInputs[4].buttonMask = 655360u; m.macroInputs[4].has_duration = true; m.macroInputs[4].duration = 23330u; m.macroInputs[4].has_waitDuration = true; m.macroInputs[4].waitDuration = 0u;
-          m.macroInputs[5].has_buttonMask = true; m.macroInputs[5].buttonMask = 524416u; m.macroInputs[5].has_duration = true; m.macroInputs[5].duration = 39996u; m.macroInputs[5].has_waitDuration = true; m.macroInputs[5].waitDuration = 0u;
-        }
-        { Macro& m = o.macroList[3];
-          m.has_enabled = true; m.enabled = true; m.has_exclusive = true; m.exclusive = true;
-          m.has_interruptible = true; m.interruptible = false; m.has_showFrames = true; m.showFrames = true;
-          m.has_macroType = true; m.macroType = (MacroType)1; m.has_useMacroTriggerButton = true; m.useMacroTriggerButton = false;
-          m.has_macroLabel = true; strncpy(m.macroLabel, "super left ", sizeof(m.macroLabel) - 1);
-          m.macroInputs_count = 6;
-          m.macroInputs[0].has_buttonMask = true; m.macroInputs[0].buttonMask = 131072u; m.macroInputs[0].has_duration = true; m.macroInputs[0].duration = 23330u; m.macroInputs[0].has_waitDuration = true; m.macroInputs[0].waitDuration = 0u;
-          m.macroInputs[1].has_buttonMask = true; m.macroInputs[1].buttonMask = 393216u; m.macroInputs[1].has_duration = true; m.macroInputs[1].duration = 24999u; m.macroInputs[1].has_waitDuration = true; m.macroInputs[1].waitDuration = 0u;
-          m.macroInputs[2].has_buttonMask = true; m.macroInputs[2].buttonMask = 262144u; m.macroInputs[2].has_duration = true; m.macroInputs[2].duration = 24999u; m.macroInputs[2].has_waitDuration = true; m.macroInputs[2].waitDuration = 0u;
-          m.macroInputs[3].has_buttonMask = true; m.macroInputs[3].buttonMask = 131072u; m.macroInputs[3].has_duration = true; m.macroInputs[3].duration = 23330u; m.macroInputs[3].has_waitDuration = true; m.macroInputs[3].waitDuration = 0u;
-          m.macroInputs[4].has_buttonMask = true; m.macroInputs[4].buttonMask = 393216u; m.macroInputs[4].has_duration = true; m.macroInputs[4].duration = 39996u; m.macroInputs[4].has_waitDuration = true; m.macroInputs[4].waitDuration = 0u;
-          m.macroInputs[5].has_buttonMask = true; m.macroInputs[5].buttonMask = 262272u; m.macroInputs[5].has_duration = true; m.macroInputs[5].duration = 56662u; m.macroInputs[5].has_waitDuration = true; m.macroInputs[5].waitDuration = 0u;
-        }
-        { Macro& m = o.macroList[4];
-          m.has_enabled = true; m.enabled = true; m.has_exclusive = true; m.exclusive = true;
-          m.has_interruptible = true; m.interruptible = false; m.has_showFrames = true; m.showFrames = true;
-          m.has_macroType = true; m.macroType = (MacroType)1; m.has_useMacroTriggerButton = true; m.useMacroTriggerButton = false;
-          m.has_macroLabel = true; strncpy(m.macroLabel, "dp right o", sizeof(m.macroLabel) - 1);
-          m.macroInputs_count = 4;
-          m.macroInputs[0].has_buttonMask = true; m.macroInputs[0].buttonMask = 524288u; m.macroInputs[0].has_duration = true; m.macroInputs[0].duration = 26664u; m.macroInputs[0].has_waitDuration = true; m.macroInputs[0].waitDuration = 0u;
-          m.macroInputs[1].has_buttonMask = true; m.macroInputs[1].buttonMask = 655360u; m.macroInputs[1].has_duration = true; m.macroInputs[1].duration = 23332u; m.macroInputs[1].has_waitDuration = true; m.macroInputs[1].waitDuration = 0u;
-          m.macroInputs[2].has_buttonMask = true; m.macroInputs[2].buttonMask = 525344u; m.macroInputs[2].has_duration = true; m.macroInputs[2].duration = 39996u; m.macroInputs[2].has_waitDuration = true; m.macroInputs[2].waitDuration = 0u;
-          m.macroInputs[3].has_buttonMask = true; m.macroInputs[3].buttonMask = 393216u; m.macroInputs[3].has_duration = true; m.macroInputs[3].duration = 73328u; m.macroInputs[3].has_waitDuration = true; m.macroInputs[3].waitDuration = 0u;
-        }
-        { Macro& m = o.macroList[5];
-          m.has_enabled = true; m.enabled = true; m.has_exclusive = true; m.exclusive = true;
-          m.has_interruptible = true; m.interruptible = false; m.has_showFrames = true; m.showFrames = true;
-          m.has_macroType = true; m.macroType = (MacroType)1; m.has_useMacroTriggerButton = true; m.useMacroTriggerButton = false;
-          m.has_macroLabel = true; strncpy(m.macroLabel, "dp left oo", sizeof(m.macroLabel) - 1);
-          m.macroInputs_count = 4;
-          m.macroInputs[0].has_buttonMask = true; m.macroInputs[0].buttonMask = 262144u; m.macroInputs[0].has_duration = true; m.macroInputs[0].duration = 39996u; m.macroInputs[0].has_waitDuration = true; m.macroInputs[0].waitDuration = 0u;
-          m.macroInputs[1].has_buttonMask = true; m.macroInputs[1].buttonMask = 393216u; m.macroInputs[1].has_duration = true; m.macroInputs[1].duration = 23330u; m.macroInputs[1].has_waitDuration = true; m.macroInputs[1].waitDuration = 0u;
-          m.macroInputs[2].has_buttonMask = true; m.macroInputs[2].buttonMask = 263200u; m.macroInputs[2].has_duration = true; m.macroInputs[2].duration = 56662u; m.macroInputs[2].has_waitDuration = true; m.macroInputs[2].waitDuration = 0u;
-          m.macroInputs[3].has_buttonMask = true; m.macroInputs[3].buttonMask = 655360u; m.macroInputs[3].has_duration = true; m.macroInputs[3].duration = 123326u; m.macroInputs[3].has_waitDuration = true; m.macroInputs[3].waitDuration = 0u;
+        for (int i = 0; i < 6; i++) {
+            Macro& m = o.macroList[i];
+            const SagatMacro& d = SAGAT_MACROS[i];
+            m.has_enabled = true; m.enabled = true; m.has_exclusive = true; m.exclusive = true;
+            m.has_interruptible = true; m.interruptible = false; m.has_showFrames = true; m.showFrames = true;
+            m.has_macroType = true; m.macroType = (MacroType)1; m.has_useMacroTriggerButton = true; m.useMacroTriggerButton = false;
+            m.has_macroLabel = true; strncpy(m.macroLabel, d.label, sizeof(m.macroLabel) - 1);
+            m.macroInputs_count = d.n;
+            for (int k = 0; k < d.n; k++) {
+                MacroInput& in = m.macroInputs[k];
+                in.has_buttonMask = true; in.buttonMask = d.s[k].mask;
+                in.has_duration = true; in.duration = d.s[k].dur;
+                in.has_waitDuration = true; in.waitDuration = 0;
+            }
         }
     }
     bool sagatActive = false;       // a built-in profile (Sagat or pink) is active
@@ -234,24 +185,15 @@ namespace {
     bool chunActive = false;        // Chun-Li profile (↓↓ kick gear, air qcf kick dive; all six macros run by chunProcess)
     bool jamieActive = false;       // Jamie profile (Cammy's engine; keeps the command grab, crouch LK+MK / MK+HK = qcf kick)
     bool kimActive = false;         // Kimberly profile (anti-air gear, air qcf punch / qcb kick; all six macros run by kimProcess)
-    int  profileIdx = 0;            // 0 Sagat, 1 Luke, 2 Cammy, 3 Jamie, 4 Aki, 5 Chun-Li, 6 Ingrid, 7 Kimberly, 8 Lily, 9 Arjin, 10 Manon, 11 stored config (Viper)
-    MacroOptions g_pinkOpts;
-    MacroOptions g_arjinOpts;
-    MacroOptions g_lukeOpts;
-    void buildLukeOptions() { g_lukeOpts = g_sagatOpts; }   // same as Sagat
-    MacroOptions g_lilyOpts;
-    MacroOptions g_cammyOpts;
-    MacroOptions g_akiOpts;
-    MacroOptions g_chunOpts;
-    MacroOptions g_ingridOpts;
-    MacroOptions g_kimOpts;
-    void buildChunOptions() {
-        g_chunOpts = g_sagatOpts;
-        for (int i = 0; i < 6; i++) g_chunOpts.macroList[i].enabled = false;   // all run by the Chun-Li engine
-    }
-    void buildAkiOptions() {
-        g_akiOpts = g_sagatOpts;
-        for (int i = 0; i < 6; i++) g_akiOpts.macroList[i].enabled = false;   // all run by the Aki engine
+    MacroOptions g_pinkOpts;        // Manon
+    MacroOptions g_cammyOpts;       // Cammy, Jamie
+    MacroOptions g_gearOnlyOpts;    // Lily, Arjin: Sagat gear on Macro 1/2, Macro 3-6 run by the engine
+    MacroOptions g_engineOpts;      // Aki, Chun-Li, Ingrid, Kimberly: all six macros run by the engine
+    void buildEngineOptions() {
+        g_engineOpts = g_sagatOpts;
+        for (int i = 0; i < 6; i++) g_engineOpts.macroList[i].enabled = false;
+        g_gearOnlyOpts = g_sagatOpts;
+        for (int i = 2; i < 6; i++) g_gearOnlyOpts.macroList[i].enabled = false;
     }
     void buildCammyOptions() {
         g_cammyOpts = g_sagatOpts;
@@ -268,13 +210,40 @@ namespace {
             }
         }
     }
-    void buildLilyOptions() {
-        g_lilyOpts = g_sagatOpts;
-        for (int i = 2; i < 6; i++) g_lilyOpts.macroList[i].enabled = false;   // gear stays Sagat's; supers + SPD run by the Lily engine
-    }
-    void buildArjinOptions() {
-        g_arjinOpts = g_sagatOpts;      // gear DP right/left from Sagat (punch gears only)
-        for (int i = 2; i < 6; i++) g_arjinOpts.macroList[i].enabled = false;   // supers + grabs run by the engine
+    // The pin 20 + Macro 1 (next) / Macro 2 (previous) cycle, in order.
+    enum { P_SAGAT, P_LUKE, P_CAMMY, P_JAMIE, P_AKI, P_CHUN, P_INGRID, P_KIM, P_LILY, P_ARJIN, P_MANON, P_VIPER, P_COUNT };
+    struct Profile { MacroOptions* opts; int pic; uint32_t ledBase, ledBurn; };   // opts nullptr = stored config
+    const Profile PROFILES[P_COUNT] = {
+        {&g_sagatOpts,    0,  0xFFEB8C, 0xFF7800},   // Sagat: light yellow / orange
+        {&g_sagatOpts,    4,  0x5AC8FF, 0x001EFF},   // Luke: light blue / blue
+        {&g_cammyOpts,    6,  0x00FFFF, 0x00506E},   // Cammy: cyan
+        {&g_cammyOpts,    11, 0xFFDC00, 0x808080},   // Jamie: yellow / grey
+        {&g_engineOpts,   7,  0xAA3CFF, 0x46006E},   // Aki: purple
+        {&g_engineOpts,   8,  0x87CEFA, 0x003CFF},   // Chun-Li: sky blue / blue
+        {&g_engineOpts,   9,  0xB57EDC, 0xE6D7FF},   // Ingrid: lavender / pale lavender
+        {&g_engineOpts,   10, 0xFFEB8C, 0x808080},   // Kimberly: rainbow / grey
+        {&g_gearOnlyOpts, 5,  0x0ABAB5, 0x005F5A},   // Lily: tiffany
+        {&g_gearOnlyOpts, 1,  0xFFEB8C, 0xFF7800},   // Arjin: like Sagat
+        {&g_pinkOpts,     2,  0xFF3CA0, 0x9600FF},   // Manon: pink / purple
+        {nullptr,         3,  0xFFEB8C, 0xFF7800},   // Viper (stored config, its own LED code)
+    };
+    int  profileIdx = P_SAGAT;
+    void setProfileFlags() {            // everything that follows from profileIdx
+        int p = profileIdx;
+        sagatActive  = (p != P_VIPER);
+        lukeActive   = (p == P_LUKE);
+        jamieActive  = (p == P_JAMIE);
+        cammyActive  = (p == P_CAMMY) || jamieActive;   // Jamie runs on Cammy's engine and options
+        akiActive    = (p == P_AKI);
+        chunActive   = (p == P_CHUN);
+        ingridActive = (p == P_INGRID);
+        kimActive    = (p == P_KIM);
+        lilyActive   = (p == P_LILY);
+        arjinActive  = (p == P_ARJIN);
+        pinkActive   = (p == P_MANON);
+        g_profilePic = PROFILES[p].pic;
+        g_ledBase = PROFILES[p].ledBase; g_ledBurn = PROFILES[p].ledBurn; g_ledRainbow = kimActive;
+        g_sagatMode = sagatActive;
     }
     void buildPinkOptions() {
         g_pinkOpts = g_sagatOpts;
@@ -1151,21 +1120,94 @@ namespace {
         V.seq[V.seqLen - 1].heCut = humanErrorCut(dur);
     }
 
-    // ---------------- pink profile: gear qcf / ↓HP x2, both-sides command grab
-    uint32_t pinkGear = LP;
-    bool cgrab = false, cgrabOD = false;
-    uint32_t prevPinkPins = 0;
+    // ---------------- shared pieces of the per-profile engines
+    constexpr uint64_t CHORD_US = FRAME_US / 2;      // buttons "together" = within half a frame, no delay
     // relative code for an absolute direction (horiz: +1 right, -1 left, 0 none)
     uint8_t absDir(bool down, int horiz) {
         uint8_t r = down ? D_ : 0;
         if (horiz) r |= ((horiz > 0) == V.facingRight) ? F_ : B_;
         return r;
     }
+    int sideH(bool fwd) { return (fwd == V.facingRight) ? +1 : -1; }   // screen direction of forward / back
+    uint8_t cleanStick(Gamepad* gp) {                // the stick as the game sees it (SOCD cleaned)
+        return runSOCDCleaner(Gamepad::resolveSOCDMode(gp->getOptions()), gp->state.dpad);
+    }
+    // start the sequence just built and run its first poll
+    bool play(Gamepad* gp, uint64_t now, uint8_t prel) { startSeq(now, 0, 0); return runSeq(gp, now, prel); }
+    // quarter circle on screen: ↓, then the down-diagonal and the horizontal toward h (+1 →, -1 ←) + btn
+    void seqQuarter(int h, uint32_t btn, uint32_t lo10, uint32_t hi10) {
+        vClear();
+        vPush(absDir(true, 0), 0, randomRange(F10(lo10), F10(hi10)));
+        vPush(absDir(true, h), 0, randomRange(F10(lo10), F10(hi10)));
+        vPush(absDir(false, h), btn, vBtn());
+    }
+    // super, fixed on screen: h = +1 -> ↓ ↘ → ↓ ↘ →, h = -1 -> ↓ ↙ ← ↓ ↙ ←, then + btn
+    void seqSuperFixed(int h, uint32_t btn) {
+        superArrowsAndFinish({absDir(true, 0), absDir(true, h), absDir(false, h), absDir(true, 0), absDir(true, h)},
+                             absDir(false, h), btn);
+    }
+    // Per-engine input edges, plus the "diagonal jump, then a button = special in the air" rule.
+    constexpr int ENG_STICK = 1, ENG_JUMP = 2;
+    struct Eng {
+        uint32_t prevPins = 0, prevPhys = 0;
+        uint8_t  prevAbs = 0;
+        int      jumpDir = 0;                        // +1 jumped ↗, -1 jumped ↖ (on screen)
+        uint64_t jumpAt = 0, airAt = 0;
+        uint32_t airBtn = 0;
+        bool     air = false;                        // an air special is playing
+        // this poll:
+        uint32_t rise = 0, phys = 0, physRise = 0;
+        uint8_t  prel = 0, ad = 0;
+        void read(Gamepad* gp, uint32_t pinMask, uint64_t now, int what) {
+            uint32_t pins = (uint32_t)gp->debouncedGpio & pinMask;
+            rise = pins & ~prevPins; prevPins = pins;
+            phys = gp->state.buttons;
+            physRise = phys & ~prevPhys; prevPhys = phys;
+            V.suppress &= phys;                      // released buttons are no longer hidden
+            prel = toRel(gp->state.dpad);
+            if (what & ENG_STICK) ad = cleanStick(gp);
+            if (what & ENG_JUMP) {                   // the moment you pressed a diagonal jump (↗ or ↖)
+                const uint8_t UR = GAMEPAD_MASK_UP | GAMEPAD_MASK_RIGHT, UL = GAMEPAD_MASK_UP | GAMEPAD_MASK_LEFT;
+                bool urNow = (ad & UR) == UR && !(ad & GAMEPAD_MASK_DOWN), ulNow = (ad & UL) == UL && !(ad & GAMEPAD_MASK_DOWN);
+                if (urNow && (prevAbs & UR) != UR) { jumpAt = now; jumpDir = +1; }
+                if (ulNow && (prevAbs & UL) != UL) { jumpAt = now; jumpDir = -1; }
+                prevAbs = ad;
+            }
+        }
+        bool jumped(uint64_t now, uint64_t frames) const { return jumpAt && now - jumpAt <= frames * FRAME_US; }
+        // qcf / qcb toward h + btn in the air
+        bool startAir(Gamepad* gp, uint64_t now, uint32_t btn, int h) {
+            airBtn = btn; airAt = now; jumpAt = 0;
+            V.suppress |= btn;
+            seqQuarter(h, airBtn, 12, 18);
+            air = true;
+            return play(gp, now, prel);
+        }
+        // OD: a second button within 2f joins the air special
+        void airOD(uint32_t extra, uint64_t now) {
+            if (air && extra && now - airAt <= 2ULL * FRAME_US && V.seqPos < V.seqLen) {
+                airBtn |= extra; V.suppress |= extra;
+                V.seq[V.seqLen - 1].btn = airBtn;
+            }
+        }
+        // keep playing; when an air special ends the side follows the jump (↗ -> facing right, ↖ -> facing left)
+        bool run(Gamepad* gp, uint64_t now) {
+            bool wasAir = air;
+            if (runSeq(gp, now, prel)) return true;
+            if (wasAir && jumpDir) { V.facingRight = (jumpDir > 0); g_viperFacingRight = V.facingRight; }
+            air = false;
+            return false;
+        }
+    };
+
+    // ---------------- pink profile: gear qcf / ↓HP x2, both-sides command grab
+    uint32_t pinkGear = LP;
+    bool cgrab = false, cgrabOD = false;
+    uint32_t prevPinkPins = 0;
     bool pinkHKHold = false;
     bool pinkHoldAfter = false;
     void seqPinkGear(int side, uint8_t physRel) {   // side +1 = right version, -1 = left version
         vClear();
-        auto ar = [](){ return randomRange(F10(12), F10(22)); };
         if (pinkGear & KICK_MASK) {             // ↓, N, ↓ + kick (LK: OD with LK+MK while holding ↙ / ↘)
             uint32_t k = pinkGear;
             if (k == LK && (physRel & RD) && (physRel & (RF | RB))) k = LK | MK;
@@ -1180,9 +1222,7 @@ namespace {
             vPush(D_, HP, randomRange(F10(30), F10(50)));
             return;
         }
-        vPush(absDir(true, 0), 0, ar());
-        vPush(absDir(true, side), 0, ar());
-        vPush(absDir(false, side), pinkGear == MP ? (LK | MK) : LK, vBtn());
+        seqQuarter(side, pinkGear == MP ? (LK | MK) : LK, 12, 22);
     }
     void seqCommandGrab(uint32_t punch, bool holdingFwd) {   // half-circle back: → ↘ ↙ ← + punch
         vClear();
@@ -1218,7 +1258,6 @@ namespace {
         return tEnd - t <= 25ULL * FRAME_US;
     }
     // Luke: ↓ (any length) → ↘/↙ → →/← (a ↗/↖ after it is fine); the punch within 8f of reaching →/←
-    char lukeWhy = '-';
     bool sawQuarterCircleLuke(uint64_t now) {
         // walks back through the stick history; tiny switch flickers (↙ ← ↙ ←, ↓ ↙ ↓ ↙) are tolerated
         const uint8_t U = GAMEPAD_MASK_UP, Dn = GAMEPAD_MASK_DOWN, Lf = GAMEPAD_MASK_LEFT, Rt = GAMEPAD_MASK_RIGHT;
@@ -1228,14 +1267,14 @@ namespace {
             if (!h) {                                    // after the forward: neutral / ↗ / ↖ allowed
                 if (d == Rt || d == Lf) { h = d; tH = t; continue; }
                 if (d == 0 || d == (U | Rt) || d == (U | Lf)) continue;
-                lukeWhy = 'A'; return false;
+                return false;
             }
             if (d == h) { if (!diag) tH = t; continue; }  // first time you reached →/←
             if (d == (Dn | h)) { diag = true; continue; }
-            if (d == Dn && diag) { bool ok = now - tH <= 8ULL * FRAME_US; lukeWhy = ok ? 'O' : 'W'; return ok; }
-            lukeWhy = 'B'; return false;
+            if (d == Dn && diag) return now - tH <= 8ULL * FRAME_US;
+            return false;
         }
-        lukeWhy = 'E'; return false;
+        return false;
     }
     // ↓ ↓ (two separate presses within 12f) then HK within 7f of the second ↓
     bool sawDownDown(uint64_t now) {
@@ -1252,11 +1291,6 @@ namespace {
         if (!t1 || !gap) return false;
         return (t2 - t1) <= 12ULL * FRAME_US && (now - t2) <= 7ULL * FRAME_US;
     }
-    void seqLevel3(bool left) {                 // fixed directions: left = qcf qcf, right = qcb qcb (+ LP / HP)
-        int h = left ? +1 : -1;
-        superArrowsAndFinish({absDir(true, 0), absDir(true, h), absDir(false, h), absDir(true, 0), absDir(true, h)},
-                             absDir(false, h), coin() ? LP : HP);
-    }
     bool pinkProcess(Gamepad* gp, uint64_t now, uint32_t m1, uint32_t m2, uint32_t m3, uint32_t m4,
                      uint32_t m5, uint32_t m6, bool macroBusy) {
         bool manon = pinkActive;
@@ -1268,7 +1302,7 @@ namespace {
         uint32_t physRise = phys & ~prevPinkPhys;
         prevPinkPhys = phys;
         uint8_t dpad = gp->state.dpad;
-        if (manon) dpad = runSOCDCleaner(Gamepad::resolveSOCDMode(gp->getOptions()), dpad);   // Manon: the stick as the game sees it
+        if (manon) dpad = cleanStick(gp);   // Manon: the stick as the game sees it
         if (dpad != prevAbs) { absPush(dpad, now); }
         bool downRise = (dpad & GAMEPAD_MASK_DOWN) && !(prevAbs != 0xFF && (prevAbs & GAMEPAD_MASK_DOWN));
         prevAbs = dpad;
@@ -1331,16 +1365,16 @@ namespace {
                 return false;
             }
             seqPinkGear((rise & m1) ? +1 : -1, prel);
-            startSeq(now, 0, 0); cgrab = false;
-            return runSeq(gp, now, prel);
+            cgrab = false;
+            return play(gp, now, prel);
         }
         if (rise & (m3 | m4)) {                 // supers
             if (arjinActive || now < lvl3Until) {
-                seqLevel3((rise & m3) != 0);
+                seqSuperFixed((rise & m3) ? +1 : -1, coin() ? LP : HP);   // fixed on screen: Macro 3 = qcf qcf, Macro 4 = qcb qcb
                 armSpamFromSeq(rise & (m3 | m4), false);
                 lvl3Until = 0;
-                startSeq(now, 0, 0); cgrab = false;
-                return runSeq(gp, now, prel);
+                cgrab = false;
+                return play(gp, now, prel);
             }
             return false;                       // Manon without the window: normal super macro
         }
@@ -1348,8 +1382,7 @@ namespace {
             seqCommandGrab((rise & m5) ? LP : HP, (prel & RF) && !(prel & RD));
             cgrab = true; cgrabOD = (phys & HP) != 0;
             if (cgrabOD) { V.suppress |= HP; V.seq[V.seqLen - 1].btn = LP | HP; }
-            startSeq(now, 0, 0);
-            return runSeq(gp, now, prel);
+            return play(gp, now, prel);
         }
         return false;
     }
@@ -1360,7 +1393,7 @@ namespace {
     bool lukeTaken = false;
     void lukeProcess(Gamepad* gp, uint64_t now) {
         // the stick as the game sees it (SOCD cleaned: e.g. ↓ held + ↑ pressed = no vertical -> ←)
-        uint8_t dpad = runSOCDCleaner(Gamepad::resolveSOCDMode(gp->getOptions()), gp->state.dpad);
+        uint8_t dpad = cleanStick(gp);
         if (dpad != prevAbs) absPush(dpad, now);
         prevAbs = dpad;
         uint32_t phys = gp->state.buttons;
@@ -1389,7 +1422,8 @@ namespace {
     }
     // ---------------- Lily: Macro 1/2 = Sagat gear, Macro 5/6 = SPD (← ↙ ↓ → ↗ + LP / HP, fixed on screen),
     // a punch held or pressed during it = OD (two punches); Macro 3 = qcb qcb + P, Macro 4 = qcf qcf + P
-    uint32_t prevLilyPins = 0, lilyPunch = 0;
+    Eng eLily;
+    uint32_t lilyPunch = 0;
     bool lilySpd = false, lilyOD = false;
     uint32_t lilyODBtn(uint32_t extra) {
         uint32_t other = extra & ~lilyPunch;
@@ -1397,13 +1431,10 @@ namespace {
         return lilyPunch | lowestBit(other);
     }
     bool lilyProcess(Gamepad* gp, uint64_t now, uint32_t m1, uint32_t m2, uint32_t m3, uint32_t m4, bool macroBusy) {
-        uint32_t mask = m1 | m2 | m3 | m4;
-        uint32_t pins = (uint32_t)gp->debouncedGpio & mask;
-        uint32_t rise = pins & ~prevLilyPins;
-        prevLilyPins = pins;
-        uint32_t phys = gp->state.buttons;
-        V.suppress &= phys;                     // released buttons are no longer hidden
-        uint8_t prel = toRel(gp->state.dpad);
+        Eng& e = eLily;
+        e.read(gp, m1 | m2 | m3 | m4, now, 0);
+        uint32_t rise = e.rise, phys = e.phys;
+        uint8_t prel = e.prel;
         if (V.playing) {
             if (lilySpd && !lilyOD && V.seqPos < V.seqLen - 1) {
                 uint32_t p = phys & PUNCH_MASK & ~V.suppress;
@@ -1424,39 +1455,32 @@ namespace {
             lilyOD = held != 0;
             if (lilyOD) { V.suppress |= held; V.seq[V.seqLen - 1].btn = lilyODBtn(held); }
             lilySpd = true;
-            startSeq(now, 0, 0);
-            return runSeq(gp, now, prel);
+            return play(gp, now, prel);
         }
         if (rise & (m3 | m4)) {
             // fixed on screen (not the side switch): Macro 3 = ↓↙←↓↙←, Macro 4 = ↓↘→↓↘→ (+ LP / HP)
-            int h = (rise & m3) ? -1 : +1;
-            superArrowsAndFinish({absDir(true, 0), absDir(true, h), absDir(false, h), absDir(true, 0), absDir(true, h)},
-                                 absDir(false, h), coin() ? LP : HP);
+            seqSuperFixed((rise & m3) ? -1 : +1, coin() ? LP : HP);
             armSpamFromSeq(rise & (m3 | m4), false);
             lilySpd = false;
-            startSeq(now, 0, 0);
-            return runSeq(gp, now, prel);
+            return play(gp, now, prel);
         }
         return false;
     }
-    constexpr uint64_t CHORD_US = FRAME_US / 2;      // buttons "together" = within half a frame, no delay
     // ---------------- Cammy: diagonal jump, then a kick within 25f of the jump = qcb + that kick
     // (another kick within 2f of the first = OD, both kicks); Macro 3 = qcf qcf + P, Macro 4 = qcb qcb + P
-    uint32_t prevCammyPins = 0, prevCammyPhys = 0, cammyKick = 0;
-    uint8_t  prevCammyAbs = 0;
-    int      cammyJumpDir = 0;                      // +1 jumped ↗, -1 jumped ↖ (absolute, side switch not used)
-    uint64_t cammyJumpAt = 0, cammyKickAt = 0;
-    bool cammyAir = false;
+    Eng eCammy;
     bool cammyGrab = false;                         // a LP+MP command grab is playing (HP may still upgrade it to OD)
-    uint64_t cammyGrabAt = 0, cammyLPAt = 0, cammyMPAt = 0, cammyHPAt = 0;
-    uint64_t cammyLKAt = 0, cammyMKAt = 0, cammyHKAt = 0;
+    uint64_t cammyGrabAt = 0;
+    enum { C_LP, C_MP, C_HP, C_LK, C_MK, C_HK };
+    constexpr uint32_t CAMMY_BTN[6] = {LP, MP, HP, LK, MK, HK};
+    uint64_t cammyAt[6] = {0, 0, 0, 0, 0, 0};       // when each attack button was last pressed
     // All profiles: after your qcf / qcb, a down-diagonal slip (↘ after →, ↙ after ←) that starts within 2f
     // of reaching the forward is sent as the forward; held longer than 2f, the diagonal goes through.
     int cqfStage = 0; uint8_t cqfH = 0, cqfPrev = 0xFF, cqfFwdH = 0;
     uint64_t cqfFwdAt = 0, cqfDiagAt = 0;
     void cammyCleanQcf(Gamepad* gp, uint64_t now) {
         const uint8_t Dn = GAMEPAD_MASK_DOWN, Lf = GAMEPAD_MASK_LEFT, Rt = GAMEPAD_MASK_RIGHT;
-        uint8_t ad = runSOCDCleaner(Gamepad::resolveSOCDMode(gp->getOptions()), gp->state.dpad);
+        uint8_t ad = cleanStick(gp);
         if (ad != cqfPrev) {
             if (ad == Dn) cqfStage = 1;
             else if ((ad == (Dn | Lf) || ad == (Dn | Rt)) && cqfStage >= 1) { cqfStage = 2; cqfH = ad & (Lf | Rt); }
@@ -1478,160 +1502,90 @@ namespace {
         }
     }
     bool cammyProcess(Gamepad* gp, uint64_t now, uint32_t m3, uint32_t m4, bool macroBusy) {
-        uint32_t pins = (uint32_t)gp->debouncedGpio & (m3 | m4);
-        uint32_t rise = pins & ~prevCammyPins;
-        prevCammyPins = pins;
-        uint32_t phys = gp->state.buttons;
-        uint32_t physRise = phys & ~prevCammyPhys;
-        prevCammyPhys = phys;
-        V.suppress &= phys;
-        uint8_t prel = toRel(gp->state.dpad);
-        // the moment you pressed a diagonal jump (↗ or ↖), read like the game (SOCD cleaned)
-        uint8_t ad = runSOCDCleaner(Gamepad::resolveSOCDMode(gp->getOptions()), gp->state.dpad);
-        const uint8_t UR = GAMEPAD_MASK_UP | GAMEPAD_MASK_RIGHT, UL = GAMEPAD_MASK_UP | GAMEPAD_MASK_LEFT;
-        bool urNow = (ad & UR) == UR && !(ad & GAMEPAD_MASK_DOWN), ulNow = (ad & UL) == UL && !(ad & GAMEPAD_MASK_DOWN);
-        bool urPrev = (prevCammyAbs & UR) == UR, ulPrev = (prevCammyAbs & UL) == UL;
-        if (urNow && !urPrev) { cammyJumpAt = now; cammyJumpDir = +1; }
-        if (ulNow && !ulPrev) { cammyJumpAt = now; cammyJumpDir = -1; }
-        prevCammyAbs = ad;
+        Eng& e = eCammy;
+        e.read(gp, m3 | m4, now, ENG_STICK | ENG_JUMP);
+        uint32_t phys = e.phys, physRise = e.physRise;
         if (V.playing) {
-            if (cammyAir) {
-                uint32_t k = physRise & KICK_MASK;
-                if (k && now - cammyKickAt <= 2ULL * FRAME_US && V.seqPos < V.seqLen) {   // OD: second kick within 2f
-                    cammyKick |= k; V.suppress |= k;
-                    V.seq[V.seqLen - 1].btn = cammyKick;
-                }
-            }
+            e.airOD(physRise & KICK_MASK, now);
             if (cammyGrab && (physRise & HP) && now - cammyGrabAt <= CHORD_US && V.seqPos < V.seqLen - 1) {
                 V.suppress |= HP;                   // HP together with LP+MP: OD grab (LK+MK)
                 V.seq[V.seqLen - 1].btn = LK | MK;
             }
-            bool wasAir = cammyAir;
-            if (runSeq(gp, now, prel)) return true;
-            if (wasAir && cammyJumpDir) {           // after the air qcb kick: ↗ -> facing right, ↖ -> facing left
-                V.facingRight = (cammyJumpDir > 0);
-                g_viperFacingRight = V.facingRight;
-            }
-            cammyAir = false; cammyGrab = false;
+            if (e.run(gp, now)) return true;
+            cammyGrab = false;
         }
         if (macroBusy) return false;
+        for (int i = 0; i < 6; i++) if (physRise & CAMMY_BTN[i]) cammyAt[i] = now;
+        // two buttons pressed together (within half a frame, no delay), one of them just now
+        auto together = [&](int a, int b) {
+            uint32_t ba = CAMMY_BTN[a], bb = CAMMY_BTN[b];
+            uint64_t ta = cammyAt[a], tb = cammyAt[b];
+            return (physRise & (ba | bb)) && (phys & ba) && (phys & bb) && (ta > tb ? ta - tb : tb - ta) <= CHORD_US;
+        };
         // Jamie only: stick on N + LP + MP together = command grab (Manon's motion, follows the side) + LK; with HP too = OD (LK + MK)
-        if (physRise & LP) cammyLPAt = now;
-        if (physRise & MP) cammyMPAt = now;
-        if (physRise & HP) cammyHPAt = now;
-        if (physRise & LK) cammyLKAt = now;
-        if (physRise & MK) cammyMKAt = now;
-        if (physRise & HK) cammyHKAt = now;
-        bool cammyNeutral = runSOCDCleaner(Gamepad::resolveSOCDMode(gp->getOptions()), gp->state.dpad) == 0;
-        if (jamieActive && cammyNeutral && (physRise & (LP | MP)) && (phys & LP) && (phys & MP) &&   // only with the stick on N
-            (cammyLPAt > cammyMPAt ? cammyLPAt - cammyMPAt : cammyMPAt - cammyLPAt) <= CHORD_US) {
-            uint64_t first = cammyLPAt < cammyMPAt ? cammyLPAt : cammyMPAt;
-            bool od = (phys & HP) && (cammyHPAt + CHORD_US >= first) && (cammyHPAt <= first + CHORD_US);
+        if (jamieActive && e.ad == 0 && together(C_LP, C_MP)) {
+            uint64_t first = cammyAt[C_LP] < cammyAt[C_MP] ? cammyAt[C_LP] : cammyAt[C_MP];
+            bool od = (phys & HP) && (cammyAt[C_HP] + CHORD_US >= first) && (cammyAt[C_HP] <= first + CHORD_US);
             V.suppress |= phys & PUNCH_MASK;        // the punches stay hidden until released
-            seqCommandGrab(od ? (LK | MK) : LK, (prel & RF) && !(prel & RD));
-            cammyGrab = true; cammyGrabAt = now; cammyAir = false;
-            startSeq(now, 0, 0);
-            return runSeq(gp, now, prel);
+            seqCommandGrab(od ? (LK | MK) : LK, (e.prel & RF) && !(e.prel & RD));
+            cammyGrab = true; cammyGrabAt = now; e.air = false;
+            return play(gp, now, e.prel);
         }
-        // crouching (↓ or a down-diagonal) + two buttons together (within half a frame, no delay), follows the side:
+        // crouching (↓ or a down-diagonal) + two buttons together, follows the side:
         //   Jamie: LK+MK = qcf + MK, MK+HK = qcf + MK+HK (OD).  Cammy: LP+MP = qcb + MP, MP+HP = qcb + MP+HP (OD).
-        if (ad & GAMEPAD_MASK_DOWN) {
-            auto together = [&](uint32_t a, uint64_t ta, uint32_t b, uint64_t tb) {
-                return (physRise & (a | b)) && (phys & a) && (phys & b) && (ta > tb ? ta - tb : tb - ta) <= CHORD_US;
-            };
+        if (e.ad & GAMEPAD_MASK_DOWN) {
             uint32_t out = 0;
-            if (jamieActive) {
-                if (together(MK, cammyMKAt, HK, cammyHKAt)) out = MK | HK;
-                else if (together(LK, cammyLKAt, MK, cammyMKAt)) out = MK;
-            } else {
-                if (together(MP, cammyMPAt, HP, cammyHPAt)) out = MP | HP;
-                else if (together(LP, cammyLPAt, MP, cammyMPAt)) out = MP;
-            }
+            if (jamieActive) out = together(C_MK, C_HK) ? (MK | HK) : together(C_LK, C_MK) ? MK : 0;
+            else             out = together(C_MP, C_HP) ? (MP | HP) : together(C_LP, C_MP) ? MP : 0;
             if (out) {
                 V.suppress |= phys & (jamieActive ? KICK_MASK : PUNCH_MASK);   // hidden until released
-                vClear();
-                auto ar = [](){ return randomRange(F10(12), F10(18)); };
-                vPush(D_, 0, ar()); vPush(jamieActive ? DF : DB, 0, ar());
-                vPush(jamieActive ? F_ : B_, out, vBtn());
-                cammyAir = false; cammyGrab = false;
-                startSeq(now, 0, 0);
-                return runSeq(gp, now, prel);
+                seqQuarter(sideH(jamieActive), out, 12, 18);                   // Jamie forward, Cammy back
+                e.air = false; cammyGrab = false;
+                return play(gp, now, e.prel);
             }
         }
-        uint32_t k = physRise & KICK_MASK;
-        if (k && cammyJumpAt && now - cammyJumpAt <= 25ULL * FRAME_US) {
-            cammyKick = k; cammyKickAt = now; cammyJumpAt = 0;
-            V.suppress |= k;
-            vClear();
-            auto ar = [](){ return randomRange(F10(12), F10(18)); };
-            int h = -cammyJumpDir;                  // qcb away from the jump: ↗ -> ↓ ↙ ←, ↖ -> ↓ ↘ →
-            vPush(absDir(true, 0), 0, ar()); vPush(absDir(true, h), 0, ar());
-            vPush(absDir(false, h), cammyKick, vBtn());
-            cammyAir = true;
-            startSeq(now, 0, 0);
-            return runSeq(gp, now, prel);
-        }
-        if (rise & (m3 | m4)) {
+        // diagonal jump, then a kick within 25f: qcb away from the jump (↗ -> ↓ ↙ ←, ↖ -> ↓ ↘ →) + that kick
+        if ((physRise & KICK_MASK) && e.jumped(now, 25)) return e.startAir(gp, now, physRise & KICK_MASK, -e.jumpDir);
+        if (e.rise & (m3 | m4)) {
             // fixed on screen (not the side switch): Macro 3 = ↓ ↘ → ↓ ↘ →, Macro 4 = ↓ ↙ ← ↓ ↙ ← (+ LP / HP)
-            int h = (rise & m3) ? +1 : -1;
-            superArrowsAndFinish({absDir(true, 0), absDir(true, h), absDir(false, h), absDir(true, 0), absDir(true, h)},
-                                 absDir(false, h), coin() ? LP : HP);
-            armSpamFromSeq(rise & (m3 | m4), false);
-            cammyAir = false;
-            startSeq(now, 0, 0);
-            return runSeq(gp, now, prel);
+            seqSuperFixed((e.rise & m3) ? +1 : -1, coin() ? LP : HP);
+            armSpamFromSeq(e.rise & (m3 | m4), false);
+            e.air = false;
+            return play(gp, now, e.prel);
         }
         return false;
     }
     // ---------------- Aki: Macro 1 qcf+HP, 2 qcb+HP, 3 qcf qcf+HP, 4 qcb qcb+HP, 5 qcf qcf+kick, 6 qcb qcb+kick
     // (kick = LK / HK random; macros fixed on screen, only X follows the side switch); your ↓+HK then X within 25f = qcf qcf + kick
-    uint32_t prevAkiPins = 0, prevAkiPhys = 0;
+    Eng eAki;
     uint64_t akiHKAt = 0;
     bool akiProcess(Gamepad* gp, uint64_t now, const uint32_t* m, bool macroBusy) {
-        uint32_t mask = m[0] | m[1] | m[2] | m[3] | m[4] | m[5];
-        uint32_t pins = (uint32_t)gp->debouncedGpio & mask;
-        uint32_t rise = pins & ~prevAkiPins;
-        prevAkiPins = pins;
-        uint32_t phys = gp->state.buttons;
-        uint32_t physRise = phys & ~prevAkiPhys;
-        prevAkiPhys = phys;
-        V.suppress &= phys;
-        uint8_t prel = toRel(gp->state.dpad);
-        uint8_t ad = runSOCDCleaner(Gamepad::resolveSOCDMode(gp->getOptions()), gp->state.dpad);
+        Eng& e = eAki;
+        e.read(gp, m[0] | m[1] | m[2] | m[3] | m[4] | m[5], now, ENG_STICK);
+        uint32_t rise = e.rise;
         // Aki: your ↓ + HK. Ingrid: your HK standing or walking (no ↑ / ↓).
-        bool hkOk = ingridActive ? !(ad & (GAMEPAD_MASK_UP | GAMEPAD_MASK_DOWN)) : (ad & GAMEPAD_MASK_DOWN) != 0;
-        if ((physRise & HK) && hkOk) akiHKAt = now;
+        bool hkOk = ingridActive ? !(e.ad & (GAMEPAD_MASK_UP | GAMEPAD_MASK_DOWN)) : (e.ad & GAMEPAD_MASK_DOWN) != 0;
+        if ((e.physRise & HK) && hkOk) akiHKAt = now;
         if (V.playing) {
-            if (runSeq(gp, now, prel)) return true;
+            if (runSeq(gp, now, e.prel)) return true;
         }
         if (macroBusy) return false;
-        if ((physRise & XBTN) && !g_sagatBurnout && akiHKAt && now - akiHKAt <= (ingridActive ? 44ULL : 25ULL) * FRAME_US) {   // Ingrid 44f, Aki 25f
+        if ((e.physRise & XBTN) && !g_sagatBurnout && akiHKAt && now - akiHKAt <= (ingridActive ? 44ULL : 25ULL) * FRAME_US) {   // Ingrid 44f, Aki 25f
             akiHKAt = 0;
             V.suppress |= XBTN;                 // X stays hidden until you let go of it
             seqSagatLevel1(true);               // qcf qcf + LK / HK
-            startSeq(now, 0, 0);
-            return runSeq(gp, now, prel);
+            return play(gp, now, e.prel);
         }
-        if (!rise) return false;
-        auto ar = [](){ return randomRange(F10(12), F10(20)); };
         // macros are fixed on screen (not the side switch): "right" = toward →, "left" = toward ←
-        auto dn = [&](){ return absDir(true, 0); };
-        if (rise & (m[0] | m[1])) {             // ↓ ↘ → + HP / ↓ ↙ ← + HP
-            int h = (rise & m[0]) ? +1 : -1;
-            vClear();
-            vPush(dn(), 0, ar()); vPush(absDir(true, h), 0, ar());
-            vPush(absDir(false, h), ingridActive ? LK : HP, vBtn());   // Ingrid: + LK
+        if (rise & (m[0] | m[1])) {             // ↓ ↘ → + HP / ↓ ↙ ← + HP (Ingrid: + LK)
+            seqQuarter((rise & m[0]) ? +1 : -1, ingridActive ? LK : HP, 12, 20);
         } else if (rise & (m[2] | m[3])) {      // supers: ↓ ↘ → ↓ ↘ → / ↓ ↙ ← ↓ ↙ ← + HP (Ingrid: LP / HP random)
-            int h = (rise & m[2]) ? +1 : -1;
-            superArrowsAndFinish({dn(), absDir(true, h), absDir(false, h), dn(), absDir(true, h)}, absDir(false, h),
-                                 ingridActive ? (coin() ? LP : HP) : HP);
+            seqSuperFixed((rise & m[2]) ? +1 : -1, ingridActive ? (coin() ? LP : HP) : HP);
             armSpamFromSeq(rise & (m[2] | m[3]), false);
         } else if (rise & (m[4] | m[5])) {      // ↓ ↘ → ↓ ↘ → / ↓ ↙ ← ↓ ↙ ← + LK / HK
-            int h = (rise & m[4]) ? +1 : -1;
-            superArrowsAndFinish({dn(), absDir(true, h), absDir(false, h), dn(), absDir(true, h)}, absDir(false, h), coin() ? LK : HK);
+            seqSuperFixed((rise & m[4]) ? +1 : -1, coin() ? LK : HK);
         } else return false;
-        startSeq(now, 0, 0);
-        return runSeq(gp, now, prel);
+        return play(gp, now, e.prel);
     }
     // ---------------- pin 27 rule (every profile): press pin 27, then HK within 13f -> on frame 14 from the
     // pin 27 press: ↓ + HK (Arjin: ↓ + MP) for 2-5f, pin 27 released even if held; then full control back.
@@ -1695,60 +1649,35 @@ namespace {
     // Macro 3 = ↓↙←↓↙← + LK/HK, Macro 4 = ↓↘→↓↘→ + LK/HK, Macro 5 = ↓↘→↓↘→ + LP/HP, Macro 6 = ↓↙←↓↙← + LP/HP (fixed).
     // Dive: diagonal jump, then a kick within 23f = qcf toward the jump + that kick (two kicks within 2f = OD);
     //   after it the side follows the jump (↗ -> facing right, ↖ -> facing left).
-    uint32_t chunGear = MK, prevChunPins = 0, prevChunPhys = 0, chunKick = 0;
-    uint8_t  prevChunAbs = 0;
-    int      chunJumpDir = 0;
-    uint64_t chunJumpAt = 0, chunKickAt = 0;
-    bool     chunAir = false;
-    // HP, then HP again within 12f -> qcb + HP, starting at a random frame 8-12 from the first HP press
-    // (a late second HP: between its own frame and 12). The second HP never reaches the game.
-    uint64_t chunHPAt = 0, chunHPFireAt = 0;
-    bool     chunHPCrouch = false;                  // first HP was crouching: window 18f, start frames 18-23
-    uint64_t chunDownAt = 0;                        // last time ↓ (or a down-diagonal) was held
-    // crouch MP, then MP again within 12f -> qcb + HP starting at a random frame 8-12 from the first MP
-    uint64_t chunMPAt = 0;
-    // standing / → / ← + HK, then HK again within 18f -> qcb + HP starting at a random frame 18-23 from the first HK
-    uint64_t chunHKAt = 0;
+    Eng eChun;
+    uint32_t chunGear = MK;
+    // qcb + HP cancels (follow the side); the second press never reaches the game:
+    //   HP, then HP again within 12f          -> starts at a random frame 8-12 from the first HP
+    //   crouch HP, then HP again within 18f   -> frame 18-23
+    //   crouch MP, then MP again within 12f   -> frame 8-12
+    //   standing / → / ← + HK, then HK again within 18f -> frame 18-23
+    // (a late second press: between its own frame and the end of the range)
+    uint64_t chunHPAt = 0, chunHPFireAt = 0, chunMPAt = 0, chunHKAt = 0;
+    bool     chunHPCrouch = false;                  // first HP was crouching
+    void chunArm(uint64_t first, uint64_t loFrame, uint64_t hiFrame, uint64_t now) {
+        uint64_t lo = first + (loFrame - 1) * FRAME_US, hi = first + (hiFrame - 1) * FRAME_US;
+        if (lo < now) lo = now;
+        chunHPFireAt = (hi > lo) ? lo + randomRange(0, (uint32_t)(hi - lo)) : now;
+    }
     bool chunProcess(Gamepad* gp, uint64_t now, const uint32_t* m, bool macroBusy) {
-        uint32_t mask = m[0] | m[1] | m[2] | m[3] | m[4] | m[5];
-        uint32_t pins = (uint32_t)gp->debouncedGpio & mask;
-        uint32_t rise = pins & ~prevChunPins;
-        prevChunPins = pins;
-        uint32_t phys = gp->state.buttons;
-        uint32_t physRise = phys & ~prevChunPhys;
-        prevChunPhys = phys;
-        V.suppress &= phys;
-        uint8_t prel = toRel(gp->state.dpad);
-        uint8_t ad = runSOCDCleaner(Gamepad::resolveSOCDMode(gp->getOptions()), gp->state.dpad);
-        const uint8_t UR = GAMEPAD_MASK_UP | GAMEPAD_MASK_RIGHT, UL = GAMEPAD_MASK_UP | GAMEPAD_MASK_LEFT;
-        bool urNow = (ad & UR) == UR && !(ad & GAMEPAD_MASK_DOWN), ulNow = (ad & UL) == UL && !(ad & GAMEPAD_MASK_DOWN);
-        bool urPrev = (prevChunAbs & UR) == UR, ulPrev = (prevChunAbs & UL) == UL;
-        if (urNow && !urPrev) { chunJumpAt = now; chunJumpDir = +1; }
-        if (ulNow && !ulPrev) { chunJumpAt = now; chunJumpDir = -1; }
-        prevChunAbs = ad;
-        if (ad & GAMEPAD_MASK_DOWN) chunDownAt = now;
+        Eng& e = eChun;
+        e.read(gp, m[0] | m[1] | m[2] | m[3] | m[4] | m[5], now, ENG_STICK | ENG_JUMP);
+        uint32_t rise = e.rise, phys = e.phys, physRise = e.physRise;
+        uint8_t ad = e.ad;
         if (V.playing) {
-            if (chunAir) {
-                uint32_t k = physRise & KICK_MASK;
-                if (k && now - chunKickAt <= 2ULL * FRAME_US && V.seqPos < V.seqLen) {   // OD: second kick within 2f
-                    chunKick |= k; V.suppress |= k;
-                    V.seq[V.seqLen - 1].btn = chunKick;
-                }
-            }
-            bool wasAir = chunAir;
-            if (runSeq(gp, now, prel)) return true;
-            if (wasAir && chunJumpDir) { V.facingRight = (chunJumpDir > 0); g_viperFacingRight = V.facingRight; }
-            chunAir = false;
+            e.airOD(physRise & KICK_MASK, now);
+            if (e.run(gp, now)) return true;
         }
         if (macroBusy) return false;
         if (physRise & HP) {
-            uint64_t win = chunHPCrouch ? 18ULL : 12ULL;
-            if (chunHPAt && !chunHPFireAt && now - chunHPAt < win * FRAME_US) {   // second HP inside the window
+            if (chunHPAt && !chunHPFireAt && now - chunHPAt < (chunHPCrouch ? 18ULL : 12ULL) * FRAME_US) {   // second HP inside the window
                 V.suppress |= HP;
-                uint64_t lo = chunHPAt + (chunHPCrouch ? 17ULL : 7ULL) * FRAME_US;     // frame 18 / 8
-                uint64_t hi = chunHPAt + (chunHPCrouch ? 22ULL : 11ULL) * FRAME_US;    // frame 23 / 12
-                if (lo < now) lo = now;
-                chunHPFireAt = (hi > lo) ? lo + randomRange(0, (uint32_t)(hi - lo)) : now;
+                if (chunHPCrouch) chunArm(chunHPAt, 18, 23, now); else chunArm(chunHPAt, 8, 12, now);
             } else if (!chunHPFireAt) {
                 chunHPAt = now;                     // first HP: goes out normally
                 chunHPCrouch = (ad & GAMEPAD_MASK_DOWN) != 0;
@@ -1757,9 +1686,7 @@ namespace {
         if (physRise & MP) {
             if (chunMPAt && !chunHPFireAt && now - chunMPAt < 12ULL * FRAME_US) {   // second MP inside 12f
                 V.suppress |= MP;
-                uint64_t lo = chunMPAt + 7ULL * FRAME_US, hi = chunMPAt + 11ULL * FRAME_US;   // frames 8..12
-                if (lo < now) lo = now;
-                chunHPFireAt = (hi > lo) ? lo + randomRange(0, (uint32_t)(hi - lo)) : now;
+                chunArm(chunMPAt, 8, 12, now);
                 chunMPAt = 0;
             } else {
                 chunMPAt = (ad & GAMEPAD_MASK_DOWN) ? now : 0;   // only a crouching MP starts it
@@ -1768,9 +1695,7 @@ namespace {
         if (physRise & HK) {
             if (chunHKAt && !chunHPFireAt && now - chunHKAt < 18ULL * FRAME_US) {   // second HK inside 18f
                 V.suppress |= HK;
-                uint64_t lo = chunHKAt + 17ULL * FRAME_US, hi = chunHKAt + 22ULL * FRAME_US;   // frames 18..23
-                if (lo < now) lo = now;
-                chunHPFireAt = (hi > lo) ? lo + randomRange(0, (uint32_t)(hi - lo)) : now;
+                chunArm(chunHKAt, 18, 23, now);
                 chunHKAt = 0;
             } else {
                 bool standing = !(ad & (GAMEPAD_MASK_UP | GAMEPAD_MASK_DOWN));
@@ -1779,27 +1704,12 @@ namespace {
         }
         if (chunHPFireAt && now >= chunHPFireAt) {   // qcb + HP (follows the side)
             chunHPFireAt = 0; chunHPAt = 0; chunMPAt = 0; chunHKAt = 0;
-            vClear();
-            auto ar = [](){ return randomRange(F10(12), F10(20)); };
-            vPush(D_, 0, ar()); vPush(DB, 0, ar());
-            vPush(B_, HP, vBtn());
-            chunAir = false;
-            startSeq(now, 0, 0);
-            return runSeq(gp, now, prel);
+            seqQuarter(sideH(false), HP, 12, 20);
+            e.air = false;
+            return play(gp, now, e.prel);
         }
-        uint32_t k = physRise & KICK_MASK;
-        if (k && chunJumpAt && now - chunJumpAt <= 23ULL * FRAME_US) {   // dive (23f window)
-            chunKick = k; chunKickAt = now; chunJumpAt = 0;
-            V.suppress |= k;
-            vClear();
-            auto ar = [](){ return randomRange(F10(12), F10(18)); };
-            int h = chunJumpDir;                    // qcf toward the jump: ↗ -> ↓ ↘ →, ↖ -> ↓ ↙ ←
-            vPush(absDir(true, 0), 0, ar()); vPush(absDir(true, h), 0, ar());
-            vPush(absDir(false, h), chunKick, vBtn());
-            chunAir = true;
-            startSeq(now, 0, 0);
-            return runSeq(gp, now, prel);
-        }
+        // dive: diagonal jump, then a kick within 23f = qcf toward the jump (↗ -> ↓ ↘ →, ↖ -> ↓ ↙ ←) + that kick
+        if ((physRise & KICK_MASK) && e.jumped(now, 23)) return e.startAir(gp, now, physRise & KICK_MASK, e.jumpDir);
         if (!rise) return false;
         if (rise & (m[0] | m[1])) {
             uint32_t held = phys & KICK_MASK;
@@ -1816,21 +1726,17 @@ namespace {
             vPush(D_, crouch ? (LK | MK) : chunGear, randomRange(F10(20), F10(40)));
             V.facingRight = (rise & m[0]) != 0;     // Macro 1 -> facing right, Macro 2 -> facing left
             g_viperFacingRight = V.facingRight;
-            chunAir = false;
-            startSeq(now, 0, 0);
-            return runSeq(gp, now, prel);
+            e.air = false;
+            return play(gp, now, e.prel);
         }
-        int h; uint32_t btn;
-        if      (rise & m[2]) { h = -1; btn = coin() ? LK : HK; }
-        else if (rise & m[3]) { h = +1; btn = coin() ? LK : HK; }
-        else if (rise & m[4]) { h = +1; btn = coin() ? LP : HP; }
-        else if (rise & m[5]) { h = -1; btn = coin() ? LP : HP; }
+        if      (rise & m[2]) seqSuperFixed(-1, coin() ? LK : HK);
+        else if (rise & m[3]) seqSuperFixed(+1, coin() ? LK : HK);
+        else if (rise & m[4]) seqSuperFixed(+1, coin() ? LP : HP);
+        else if (rise & m[5]) seqSuperFixed(-1, coin() ? LP : HP);
         else return false;
-        superArrowsAndFinish({absDir(true, 0), absDir(true, h), absDir(false, h), absDir(true, 0), absDir(true, h)}, absDir(false, h), btn);
         if (rise & (m[2] | m[3])) armSpamFromSeq(rise & (m[2] | m[3]), false);   // supers repeat while held
-        chunAir = false;
-        startSeq(now, 0, 0);
-        return runSeq(gp, now, prel);
+        e.air = false;
+        return play(gp, now, e.prel);
     }
     // ---------------- Kimberly (all six macros run here)
     // Macro 1/2 = anti-air gear (Macro 1 -> facing right, Macro 2 -> facing left):
@@ -1840,56 +1746,24 @@ namespace {
     // Macro 3 = qcf qcf + LP/HP, Macro 4 = qcb qcb + LP/HP, Macro 5 = qcf qcf + LK/HK, Macro 6 = qcb qcb + LK/HK (fixed on screen)
     // Air: diagonal jump, then a punch within 25f = qcf toward the jump + that punch;
     //      a kick within 20f = qcb away from the jump + that kick (second button of the same kind within 2f = OD)
-    uint32_t prevKimPins = 0, prevKimPhys = 0, kimBtn = 0, kimGear = HP;
-    uint8_t  prevKimAbs = 0;
-    int      kimJumpDir = 0;
-    uint64_t kimJumpAt = 0, kimBtnAt = 0;
-    bool     kimAir = false, kimAirPunch = false;
+    Eng eKim;
+    uint32_t kimGear = HP;
+    bool     kimAirPunch = false;                   // the air special playing is the punch one
     bool kimProcess(Gamepad* gp, uint64_t now, const uint32_t* m, bool macroBusy) {
-        uint32_t mask = m[0] | m[1] | m[2] | m[3] | m[4] | m[5];
-        uint32_t pins = (uint32_t)gp->debouncedGpio & mask;
-        uint32_t rise = pins & ~prevKimPins;
-        prevKimPins = pins;
-        uint32_t phys = gp->state.buttons;
-        uint32_t physRise = phys & ~prevKimPhys;
-        prevKimPhys = phys;
-        V.suppress &= phys;
-        uint8_t prel = toRel(gp->state.dpad);
-        uint8_t ad = runSOCDCleaner(Gamepad::resolveSOCDMode(gp->getOptions()), gp->state.dpad);
-        const uint8_t UR = GAMEPAD_MASK_UP | GAMEPAD_MASK_RIGHT, UL = GAMEPAD_MASK_UP | GAMEPAD_MASK_LEFT;
-        bool urNow = (ad & UR) == UR && !(ad & GAMEPAD_MASK_DOWN), ulNow = (ad & UL) == UL && !(ad & GAMEPAD_MASK_DOWN);
-        bool urPrev = (prevKimAbs & UR) == UR, ulPrev = (prevKimAbs & UL) == UL;
-        if (urNow && !urPrev) { kimJumpAt = now; kimJumpDir = +1; }
-        if (ulNow && !ulPrev) { kimJumpAt = now; kimJumpDir = -1; }
-        prevKimAbs = ad;
+        Eng& e = eKim;
+        e.read(gp, m[0] | m[1] | m[2] | m[3] | m[4] | m[5], now, ENG_STICK | ENG_JUMP);
+        uint32_t rise = e.rise, phys = e.phys;
         if (V.playing) {
-            if (kimAir) {
-                uint32_t k = physRise & (kimAirPunch ? PUNCH_MASK : KICK_MASK);
-                if (k && now - kimBtnAt <= 2ULL * FRAME_US && V.seqPos < V.seqLen) {   // OD: second button within 2f
-                    kimBtn |= k; V.suppress |= k;
-                    V.seq[V.seqLen - 1].btn = kimBtn;
-                }
-            }
-            bool wasAir = kimAir;
-            if (runSeq(gp, now, prel)) return true;
-            if (wasAir && kimJumpDir) { V.facingRight = (kimJumpDir > 0); g_viperFacingRight = V.facingRight; }
-            kimAir = false;
+            e.airOD(e.physRise & (kimAirPunch ? PUNCH_MASK : KICK_MASK), now);
+            if (e.run(gp, now)) return true;
         }
         if (macroBusy) return false;
-        uint32_t ap = physRise & PUNCH_MASK, ak = physRise & KICK_MASK;
-        bool airP = ap && kimJumpAt && now - kimJumpAt <= 25ULL * FRAME_US;          // punch: 25f window
-        bool airK = !airP && ak && kimJumpAt && now - kimJumpAt <= 20ULL * FRAME_US; // kick: 20f window
+        uint32_t ap = e.physRise & PUNCH_MASK, ak = e.physRise & KICK_MASK;
+        bool airP = ap && e.jumped(now, 25);          // punch: 25f window
+        bool airK = !airP && ak && e.jumped(now, 20); // kick: 20f window
         if (airP || airK) {
-            kimBtn = airP ? ap : ak; kimBtnAt = now; kimJumpAt = 0; kimAirPunch = airP;
-            V.suppress |= kimBtn;
-            vClear();
-            auto ar = [](){ return randomRange(F10(12), F10(18)); };
-            int h = airP ? kimJumpDir : -kimJumpDir;   // punch: qcf toward the jump; kick: qcb away from it
-            vPush(absDir(true, 0), 0, ar()); vPush(absDir(true, h), 0, ar());
-            vPush(absDir(false, h), kimBtn, vBtn());
-            kimAir = true;
-            startSeq(now, 0, 0);
-            return runSeq(gp, now, prel);
+            kimAirPunch = airP;                     // punch: qcf toward the jump; kick: qcb away from it
+            return e.startAir(gp, now, airP ? ap : ak, airP ? e.jumpDir : -e.jumpDir);
         }
         if (!rise) return false;
         if (rise & (m[0] | m[1])) {
@@ -1902,14 +1776,13 @@ namespace {
             int side = (rise & m[0]) ? +1 : -1;
             V.facingRight = (side > 0);             // Macro 1 -> facing right, Macro 2 -> facing left
             g_viperFacingRight = V.facingRight;
-            vClear();
-            auto ar = [](){ return randomRange(F10(12), F10(22)); };
             if (kimGear & KICK_MASK) {              // qcb + the gear kick
-                vPush(absDir(true, 0), 0, ar()); vPush(absDir(true, -side), 0, ar());
-                vPush(absDir(false, -side), kimGear, vBtn());
+                seqQuarter(-side, kimGear, 12, 22);
             } else {                                // any punch gear
+                vClear();
                 vPush(absDir(true, 0), HP, randomRange(F10(30), F10(50)));
-                vPush(absDir(true, 0), 0, ar()); vPush(absDir(true, side), 0, ar());
+                vPush(absDir(true, 0), 0, randomRange(F10(12), F10(22)));
+                vPush(absDir(true, side), 0, randomRange(F10(12), F10(22)));
                 uint32_t lkTotal = randomRange(F10(13), F10(30));   // LK held 1.3-3f
                 uint32_t lpAfter = randomRange(F10(60), F10(80));   // LP pressed 6-8f after the LK press
                 uint32_t lpTotal = randomRange(F10(12), F10(30));   // LP held 1.2-3f
@@ -1917,21 +1790,17 @@ namespace {
                 vPush(N_, 0, lpAfter - lkTotal, FL_USER_DIR);       // between LK and LP the stick is yours
                 vPush(N_, LP, lpTotal);
             }
-            kimAir = false;
-            startSeq(now, 0, 0);
-            return runSeq(gp, now, prel);
+            e.air = false;
+            return play(gp, now, e.prel);
         }
-        int h; uint32_t btn;
-        if      (rise & m[2]) { h = +1; btn = coin() ? LP : HP; }
-        else if (rise & m[3]) { h = -1; btn = coin() ? LP : HP; }
-        else if (rise & m[4]) { h = +1; btn = coin() ? LK : HK; }
-        else if (rise & m[5]) { h = -1; btn = coin() ? LK : HK; }
+        if      (rise & m[2]) seqSuperFixed(+1, coin() ? LP : HP);
+        else if (rise & m[3]) seqSuperFixed(-1, coin() ? LP : HP);
+        else if (rise & m[4]) seqSuperFixed(+1, coin() ? LK : HK);
+        else if (rise & m[5]) seqSuperFixed(-1, coin() ? LK : HK);
         else return false;
-        superArrowsAndFinish({absDir(true, 0), absDir(true, h), absDir(false, h), absDir(true, 0), absDir(true, h)}, absDir(false, h), btn);
         if (rise & (m[2] | m[3])) armSpamFromSeq(rise & (m[2] | m[3]), false);   // supers repeat while held
-        kimAir = false;
-        startSeq(now, 0, 0);
-        return runSeq(gp, now, prel);
+        e.air = false;
+        return play(gp, now, e.prel);
     }
     // ---------------- X turbo (every profile, burnout off): random 1.2-2.2f on / off
     bool xTurboPrev = false, xTurboOn = true;
@@ -2005,61 +1874,29 @@ static void detectViperMode(MacroOptions* opts) {
     g_viperBurnout = V.burnout;
 }
 
-void InputMacro::setup() {
+// Which GPIO pin each macro button / the turbo button is on.
+void InputMacro::mapMacroPins() {
     GpioMappingInfo* pinMappings = Storage::getInstance().getProfilePinMappings();
     macroButtonMask = 0;
     memset(macroPinMasks, 0, sizeof(macroPinMasks));
-    for (Pin_t pin = 0; pin < (Pin_t)NUM_BANK0_GPIOS; pin++)
-    {
-        switch( pinMappings[pin].action ) {
-            case GpioAction::BUTTON_PRESS_MACRO:
-                macroButtonMask = 1 << pin;
-                break;
-            case GpioAction::BUTTON_PRESS_MACRO_1:
-                macroPinMasks[0] = 1 << pin;
-                break;
-            case GpioAction::BUTTON_PRESS_MACRO_2:
-                macroPinMasks[1] = 1 << pin;
-                break;
-            case GpioAction::BUTTON_PRESS_MACRO_3:
-                macroPinMasks[2] = 1 << pin;
-                break;
-            case GpioAction::BUTTON_PRESS_MACRO_4:
-                macroPinMasks[3] = 1 << pin;
-                break;
-            case GpioAction::BUTTON_PRESS_MACRO_5:
-                macroPinMasks[4] = 1 << pin;
-                break;
-            case GpioAction::BUTTON_PRESS_MACRO_6:
-                macroPinMasks[5] = 1 << pin;
-                break;
-            case GpioAction::BUTTON_PRESS_TURBO:
-                turboPinMask = 1u << pin;
-                break;
-            default:
-                break;
-        }
+    for (Pin_t pin = 0; pin < (Pin_t)NUM_BANK0_GPIOS; pin++) {
+        GpioAction a = pinMappings[pin].action;
+        if (a == GpioAction::BUTTON_PRESS_MACRO) macroButtonMask = 1 << pin;
+        else if (a >= GpioAction::BUTTON_PRESS_MACRO_1 && a <= GpioAction::BUTTON_PRESS_MACRO_6)
+            macroPinMasks[(int)a - (int)GpioAction::BUTTON_PRESS_MACRO_1] = 1 << pin;
+        else if (a == GpioAction::BUTTON_PRESS_TURBO) turboPinMask = 1u << pin;
     }
+}
+
+void InputMacro::setup() {
+    mapMacroPins();
 
     buildSagatOptions();
     buildPinkOptions();
-    buildArjinOptions();
-    buildLukeOptions();
-    buildLilyOptions();
     buildCammyOptions();
-    buildAkiOptions();
-    buildChunOptions();
-    g_ingridOpts = g_akiOpts;                       // all six macros run by the Aki engine
-    ingridActive = false; g_ingridMode = false;
-    g_kimOpts = g_akiOpts;                          // all six macros run by the Kimberly engine
-    kimActive = false; g_kimMode = false;
-    chunActive = false; g_chunMode = false;
-    akiActive = false; g_akiMode = false;
-    cammyActive = false; g_cammyMode = false;
-    jamieActive = false; g_jamieMode = false;
-    profileIdx = 0; pinkActive = false; arjinActive = false; lukeActive = false; g_lukeMode = false; lilyActive = false; g_lilyMode = false; g_pinkMode = false; g_profilePic = 0;
-    sagatActive = true;                 // power-up in the built-in Sagat set
-    g_sagatMode = true;
+    buildEngineOptions();
+    profileIdx = P_SAGAT;               // power-up in the built-in Sagat set
+    setProfileFlags();
     inputMacroOptions = &g_sagatOpts;
     if (Storage::getInstance().getAddonOptions().macroOptions.macroBoardLedEnabled && isValidPin(BOARD_LED_PIN)) {
         gpio_init(BOARD_LED_PIN);
@@ -2330,44 +2167,21 @@ void InputMacro::preprocess()
             V.suppress = 0; V.rawPending = false;
             gearPendingMacro = -1;
             spamReset();
-            profileIdx = (profileIdx + (comboNext ? 1 : 11)) % 12;   // Sagat -> Luke -> Cammy -> Jamie -> Aki -> Chun-Li -> Ingrid -> Kimberly -> Lily -> Arjin -> Manon -> Viper
-            sagatActive = (profileIdx != 11);
-            lukeActive = (profileIdx == 1);
-            jamieActive = (profileIdx == 3);
-            cammyActive = (profileIdx == 2) || jamieActive;   // Jamie runs on Cammy's engine and options
-            akiActive = (profileIdx == 4);
-            chunActive = (profileIdx == 5);
-            ingridActive = (profileIdx == 6);
-            kimActive = (profileIdx == 7);
-            lilyActive = (profileIdx == 8);
-            arjinActive = (profileIdx == 9);
-            pinkActive = (profileIdx == 10);
-            { static const int pic[12] = {0, 4, 6, 11, 7, 8, 9, 10, 5, 1, 2, 3}; g_profilePic = pic[profileIdx]; }
-            g_ingridMode = ingridActive;
-            g_kimMode = kimActive; kimAir = false; kimJumpAt = 0; kimGear = HP;
-            g_chunMode = chunActive; chunAir = false; chunJumpAt = 0; chunGear = MK; chunHPAt = 0; chunHPFireAt = 0; chunDownAt = 0; chunMPAt = 0; chunHKAt = 0;
-            g_akiMode = akiActive; akiHKAt = 0;
-            g_cammyMode = cammyActive && !jamieActive; g_jamieMode = jamieActive; cammyAir = false; cammyJumpAt = 0; cammyGrab = false;
-            g_lilyMode = lilyActive; lilySpd = false; lilyOD = false;
-            g_lukeMode = lukeActive; lukeHoldBtn = 0; lukeSuppress = 0; lukeTaken = false;
+            profileIdx = (profileIdx + (comboNext ? 1 : P_COUNT - 1)) % P_COUNT;
+            setProfileFlags();
+            eKim.air = false; eKim.jumpAt = 0; kimGear = HP;
+            eChun.air = false; eChun.jumpAt = 0; chunGear = MK; chunHPAt = 0; chunHPFireAt = 0; chunMPAt = 0; chunHKAt = 0;
+            akiHKAt = 0;
+            eCammy.air = false; eCammy.jumpAt = 0; cammyGrab = false;
+            lilySpd = false; lilyOD = false;
+            lukeHoldBtn = 0; lukeSuppress = 0; lukeTaken = false;
             g_sagatBurnout = false;
             lvl3Until = 0; arjinHKHold = false; arjinBlockUntil = 0; arjinPendUntil = 0; arjinPending = 0; arjinDownSwallow = false;
-            g_sagatMode = sagatActive;
-            g_pinkMode = pinkActive;
             cgrab = false; pinkHKHold = false; pinkHoldAfter = false;
             for (int i = 0; i < MAX_MACRO_LIMIT; i++) gearMask[i] = 0;
             if (cammyActive) { gearMask[0] = LK; gearMask[1] = LK; }   // Cammy DP gear starts on LK
             if (lilyActive)  { gearMask[0] = MP; gearMask[1] = MP; }   // Lily DP gear starts on MP
-            inputMacroOptions = (profileIdx == 0) ? &g_sagatOpts
-                              : (profileIdx == 1) ? &g_lukeOpts
-                              : (profileIdx == 2 || profileIdx == 3) ? &g_cammyOpts
-                              : (profileIdx == 4) ? &g_akiOpts
-                              : (profileIdx == 5) ? &g_chunOpts
-                              : (profileIdx == 6) ? &g_ingridOpts
-                              : (profileIdx == 7) ? &g_kimOpts
-                              : (profileIdx == 8) ? &g_lilyOpts
-                              : (profileIdx == 9) ? &g_arjinOpts
-                              : (profileIdx == 10) ? &g_pinkOpts
+            inputMacroOptions = PROFILES[profileIdx].opts ? PROFILES[profileIdx].opts
                               : &Storage::getInstance().getAddonOptions().macroOptions;
             macrosOn = true;
             detectViperMode(inputMacroOptions);
@@ -2563,39 +2377,6 @@ void InputMacro::preprocess()
 }
 
 void InputMacro::reinit() {
-    GpioMappingInfo* pinMappings = Storage::getInstance().getProfilePinMappings();
-    macroButtonMask = 0;
-    memset(macroPinMasks, 0, sizeof(macroPinMasks));
-    for (Pin_t pin = 0; pin < (Pin_t)NUM_BANK0_GPIOS; pin++)
-    {
-        switch( pinMappings[pin].action ) {
-            case GpioAction::BUTTON_PRESS_MACRO:
-                macroButtonMask = 1 << pin;
-                break;
-            case GpioAction::BUTTON_PRESS_MACRO_1:
-                macroPinMasks[0] = 1 << pin;
-                break;
-            case GpioAction::BUTTON_PRESS_MACRO_2:
-                macroPinMasks[1] = 1 << pin;
-                break;
-            case GpioAction::BUTTON_PRESS_MACRO_3:
-                macroPinMasks[2] = 1 << pin;
-                break;
-            case GpioAction::BUTTON_PRESS_MACRO_4:
-                macroPinMasks[3] = 1 << pin;
-                break;
-            case GpioAction::BUTTON_PRESS_MACRO_5:
-                macroPinMasks[4] = 1 << pin;
-                break;
-            case GpioAction::BUTTON_PRESS_MACRO_6:
-                macroPinMasks[5] = 1 << pin;
-                break;
-            case GpioAction::BUTTON_PRESS_TURBO:
-                turboPinMask = 1u << pin;
-                break;
-            default:
-                break;
-        }
-    }
+    mapMacroPins();
     detectViperMode(inputMacroOptions);
 }
