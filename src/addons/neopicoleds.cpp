@@ -29,6 +29,13 @@ extern volatile uint32_t g_sagatGearMask;
 // CUSTOM: the LED under each physical button follows the board's original wiring
 // (pin -> LED index), not the remapped button. Find the LED of the physical button
 // that currently sends `mask` (e.g. LP moved to another button lights that button).
+// CUSTOM: a colour on the wheel, hue 0..1529 (red -> yellow -> green -> cyan -> blue -> magenta)
+static RGB rainbowColor(int hue) {
+    int seg = (hue / 255) % 6, f = hue % 255;
+    return seg == 0 ? RGB(255, f, 0) : seg == 1 ? RGB(255 - f, 255, 0) : seg == 2 ? RGB(0, 255, f)
+         : seg == 3 ? RGB(0, 255 - f, 255) : seg == 4 ? RGB(f, 0, 255) : RGB(255, 0, 255 - f);
+}
+
 static int physLedForMask(uint32_t mask) {
     static const int8_t pinLed[30] = {
         -1, -1,  3,  1,  2,  0,  8,  9, 10, 11,   // pins 0-9
@@ -669,10 +676,7 @@ void NeoPicoLEDAddon::process() {
                     int hue = total ? (n * 1530) / total : 0;   // 0..1529 around the colour wheel
                     n++;
                     if (pixel.mask == sideMask) continue;       // side arrow stays white
-                    int seg = hue / 255, f = hue % 255;
-                    RGB rc = seg == 0 ? RGB(255, f, 0) : seg == 1 ? RGB(255 - f, 255, 0) : seg == 2 ? RGB(0, 255, f)
-                           : seg == 3 ? RGB(0, 255 - f, 255) : seg == 4 ? RGB(f, 0, 255) : RGB(255, 0, 255 - f);
-                    uint32_t c = rc.value(fmt, bx);
+                    uint32_t c = rainbowColor(hue).value(fmt, bx);
                     for (auto pos : pixel.positions)
                         if (pos < 100) frame[pos] = c;
                 }
@@ -720,6 +724,37 @@ void NeoPicoLEDAddon::process() {
 			this->ambientLightLinkage(); //Custom mode
 		}
 	}
+
+    // CUSTOM: built-in profiles: LEDs that belong to no game button (the Macro 1 / Macro 2 gear buttons, lit by
+    // the case / ambient light) take the profile colour like the rest
+    if (g_sagatMode && !g_viperActive) {
+        bool taken[100] = {false};
+        for (auto &row : matrix.pixels)
+            for (auto &pixel : row) {
+                if (pixel.index < 0 || pixel.mask == 0) continue;
+                for (auto pos : pixel.positions)
+                    if (pos < 100) taken[pos] = true;
+            }
+        if (ledOptions.pledType == PLED_TYPE_RGB) {            // player LEDs keep their own job
+            int32_t pled[] = { ledOptions.pledIndex1, ledOptions.pledIndex2, ledOptions.pledIndex3, ledOptions.pledIndex4 };
+            for (int i = 0; i < 4; i++)
+                if (pled[i] >= 0 && pled[i] < 100) taken[pled[i]] = true;
+        }
+        const TurboOptions& turboOpts = Storage::getInstance().getAddonOptions().turboOptions;
+        if (turboOpts.turboLedType == PLED_TYPE_RGB && turboOpts.turboLedIndex >= 0 && turboOpts.turboLedIndex < 100)
+            taken[turboOpts.turboLedIndex] = true;             // so does the turbo LED
+        int last = ledCount < 100 ? ledCount : 100, total = 0, n = 0;
+        for (int i = 0; i < last; i++) if (!taken[i]) total++;
+        float bx = as.GetBrightnessX() * (g_ledRainbow ? 0.18f : 0.25f);
+        LEDFormat fmt = neopico.GetFormat();
+        bool rainbow = g_ledRainbow && !g_sagatBurnout;
+        uint32_t base = RGB((uint32_t)(g_sagatBurnout ? g_ledBurn : g_ledBase)).value(fmt, bx);
+        for (int i = 0; i < last; i++) {
+            if (taken[i]) continue;
+            frame[i] = rainbow ? rainbowColor((n * 1530) / total).value(fmt, bx) : base;
+            n++;
+        }
+    }
 
     neopico.SetFrame(frame);
     neopico.Show();

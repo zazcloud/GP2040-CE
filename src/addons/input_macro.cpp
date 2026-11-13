@@ -217,7 +217,7 @@ namespace {
         {&g_sagatOpts,    0,  0xFFEB8C, 0xFF7800},   // Sagat: light yellow / orange
         {&g_sagatOpts,    4,  0x5AC8FF, 0x001EFF},   // Luke: light blue / blue
         {&g_cammyOpts,    6,  0x00FFFF, 0x00506E},   // Cammy: cyan
-        {&g_cammyOpts,    11, 0xFFDC00, 0x808080},   // Jamie: yellow / grey
+        {&g_cammyOpts,    11, 0x808080, 0xFFDC00},   // Jamie: grey / yellow
         {&g_engineOpts,   7,  0xAA3CFF, 0x46006E},   // Aki: purple
         {&g_engineOpts,   8,  0x87CEFA, 0x003CFF},   // Chun-Li: sky blue / blue
         {&g_engineOpts,   9,  0xB57EDC, 0xE6D7FF},   // Ingrid: lavender / pale lavender
