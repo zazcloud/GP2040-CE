@@ -24,11 +24,20 @@ extern volatile bool g_sagatMode;
 extern volatile bool g_sagatBurnout;
 extern volatile uint32_t g_ledBase, g_ledBurn;   // current built-in profile's colours (0xRRGGBB)
 extern volatile bool g_ledRainbow;               // Kimberly: fixed rainbow, a little dimmer
+extern volatile uint32_t g_ledGear;              // gear buttons' colour by the gear on them (0 = profile colour)
+extern volatile int g_ledFreePin;                // GPIO pin of the free button (of Macro 5 / 6), -1 = none
+extern volatile uint32_t g_ledFreeColor;         // ... and its colour by the stored move
 extern volatile uint32_t g_sagatGearMask;
 
 // CUSTOM: the LED under each physical button follows the board's original wiring
 // (pin -> LED index), not the remapped button. Find the LED of the physical button
 // that currently sends `mask` (e.g. LP moved to another button lights that button).
+// CUSTOM: the LED under each GPIO pin's physical button (-1 = none)
+static const int8_t pinLed[30] = {
+    -1, -1,  3,  1,  2,  0,  8,  9, 10, 11,   // pins 0-9
+     4,  5,  6,  7, -1, -1, -1, -1, 13, 14,   // pins 10-19
+    12, 15, -1, -1, -1, -1, -1, -1, -1, -1 }; // pins 20-29
+
 // CUSTOM: a colour on the wheel, hue 0..1529 (red -> yellow -> green -> cyan -> blue -> magenta)
 static RGB rainbowColor(int hue) {
     int seg = (hue / 255) % 6, f = hue % 255;
@@ -37,10 +46,6 @@ static RGB rainbowColor(int hue) {
 }
 
 static int physLedForMask(uint32_t mask) {
-    static const int8_t pinLed[30] = {
-        -1, -1,  3,  1,  2,  0,  8,  9, 10, 11,   // pins 0-9
-         4,  5,  6,  7, -1, -1, -1, -1, 13, 14,   // pins 10-19
-        12, 15, -1, -1, -1, -1, -1, -1, -1, -1 }; // pins 20-29
     GpioMappingInfo* pm = Storage::getInstance().getProfilePinMappings();
     for (int pin = 0; pin < 30; pin++) {
         uint32_t m = 0;
@@ -684,6 +689,9 @@ void NeoPicoLEDAddon::process() {
         }
         int gidx = gear ? physLedForMask(gear) : -1;   // the physical button the gear is on
         if (gidx >= 0 && gidx < 100) frame[gidx] = red;
+        int fpin = g_ledFreePin;                       // the free button (of Macro 5 / 6): colour of its stored move
+        if (fpin >= 0 && fpin < 30 && pinLed[fpin] >= 0)
+            frame[pinLed[fpin]] = RGB((uint32_t)g_ledFreeColor).value(fmt, bx);
     }
 
     // Apply the player LEDs to our first 4 leds if we're in NEOPIXEL mode
@@ -726,7 +734,7 @@ void NeoPicoLEDAddon::process() {
 	}
 
     // CUSTOM: built-in profiles: LEDs that belong to no game button (the Macro 1 / Macro 2 gear buttons, lit by
-    // the case / ambient light) take the profile colour like the rest
+    // the case / ambient light) take the profile colour like the rest, or the colour of the gear on them
     if (g_sagatMode && !g_viperActive) {
         bool taken[100] = {false};
         for (auto &row : matrix.pixels)
@@ -749,6 +757,8 @@ void NeoPicoLEDAddon::process() {
         LEDFormat fmt = neopico.GetFormat();
         bool rainbow = g_ledRainbow && !g_sagatBurnout;
         uint32_t base = RGB((uint32_t)(g_sagatBurnout ? g_ledBurn : g_ledBase)).value(fmt, bx);
+        uint32_t gearColor = g_ledGear;                // gear on Macro 1 / 2: punch or kick colour
+        if (gearColor) { base = RGB(gearColor).value(fmt, bx); rainbow = false; }
         for (int i = 0; i < last; i++) {
             if (taken[i]) continue;
             frame[i] = rainbow ? rainbowColor((n * 1530) / total).value(fmt, bx) : base;

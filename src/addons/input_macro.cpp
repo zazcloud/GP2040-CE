@@ -38,6 +38,9 @@ volatile int  g_profilePic       = 0;       // screen picture: 0 Sagat, 1 Arjin,
 volatile uint32_t g_ledBase      = 0xFFEB8C; // built-in profile LED colour (0xRRGGBB)
 volatile uint32_t g_ledBurn      = 0xFF7800; // ... and its burnout colour
 volatile bool g_ledRainbow       = false;    // Kimberly: fixed rainbow (a little dimmer) instead of g_ledBase
+volatile uint32_t g_ledGear      = 0;        // colour of the gear buttons (Macro 1 / 2) by the gear on them; 0 = profile colour
+volatile int  g_ledFreePin       = -1;       // GPIO pin of the free button (of Macro 5 / 6), -1 = none
+volatile uint32_t g_ledFreeColor = 0;        // ... and its colour by the move stored on it
 volatile uint32_t g_sagatGearMask = 0;      // attack button of the current gear (red LED)
 
 namespace {
@@ -2371,6 +2374,22 @@ void InputMacro::preprocess()
             else for (int k = 0; k < (int)mc.macroInputs_count; k++) gm |= mc.macroInputs[k].buttonMask & ATTACK_MASK;
         }
         g_sagatGearMask = lowestBit(gm);
+    }
+    // CUSTOM: LED colours by move type: gear buttons by the gear on them, the free button by its stored move
+    {
+        const uint32_t C_PUNCH = 0xFF5A00, C_KICK = 0x00FF00, C_OD_PUNCH = 0xFF0000, C_OD_KICK = 0x9600FF;   // orange, green, red, purple
+        uint32_t gear = sagatActive ? (uint32_t)g_sagatGearMask : 0;
+        g_ledGear = !gear ? 0 : (gear & PUNCH_MASK) ? C_PUNCH : C_KICK;
+        int pin = -1;
+        uint32_t color = 0;
+        if (cammyActive || chunActive) {
+            uint32_t pm = freePin(macroPinMasks[4], macroPinMasks[5]);
+            if (pm) pin = __builtin_ctz(pm);
+            uint32_t sel = chunActive ? chunFree : cammyFree;
+            color = (sel & PUNCH_MASK) ? (sel == HP ? C_OD_PUNCH : C_PUNCH) : (sel == HK ? C_OD_KICK : C_KICK);
+        }
+        g_ledFreeColor = color;
+        g_ledFreePin = pin;
     }
 
     checkMacroAction();
