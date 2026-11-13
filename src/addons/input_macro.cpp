@@ -35,13 +35,14 @@ volatile bool g_viperBurnout     = false;
 volatile bool g_sagatMode        = false;   // built-in Sagat macro set active (LEDs light yellow)
 volatile bool g_sagatBurnout     = false;   // Sagat burnout (orange LEDs, X = Level 1)
 volatile bool g_pinkMode         = false;   // Manon profile active (pink LEDs)
-volatile int  g_profilePic       = 0;       // screen picture: 0 Sagat, 1 Arjin, 2 Manon, 3 Viper (stored splash), 4 Luke, 5 Lily, 6 Cammy, 7 Aki, 8 Chun-Li, 9 Ingrid, 10 Kimberly
+volatile int  g_profilePic       = 0;       // screen picture: 0 Sagat, 1 Arjin, 2 Manon, 3 Viper (stored splash), 4 Luke, 5 Lily, 6 Cammy, 7 Aki, 8 Chun-Li, 9 Ingrid, 10 Kimberly, 11 Jamie
 volatile bool g_lukeMode         = false;   // Luke profile active (blue LEDs)
 volatile bool g_lilyMode         = false;   // Lily profile active (tiffany LEDs)
 volatile bool g_cammyMode        = false;   // Cammy profile active (cyan LEDs)
 volatile bool g_akiMode          = false;   // Aki profile active (purple LEDs)
 volatile bool g_chunMode         = false;   // Chun-Li profile active (sky blue LEDs)
 volatile bool g_ingridMode       = false;   // Ingrid profile active (lavender LEDs)
+volatile bool g_jamieMode        = false;   // Jamie profile active (yellow LEDs, grey in burnout)
 volatile bool g_kimMode          = false;   // Kimberly profile active (rainbow LEDs, grey in burnout)
 volatile uint32_t g_sagatGearMask = 0;      // attack button of the current gear (red LED)
 
@@ -231,8 +232,9 @@ namespace {
     bool akiActive = false;         // Aki profile (all six macros run by the Aki engine, ↓HK -> X = Level 1)
     bool ingridActive = false;      // Ingrid profile (Aki engine: qcf/qcb + LK, punch supers, standing HK -> X = Level 1)
     bool chunActive = false;        // Chun-Li profile (↓↓ kick gear, air qcf kick dive; all six macros run by chunProcess)
+    bool jamieActive = false;       // Jamie profile (Cammy's engine; keeps the command grab, crouch LK+MK / MK+HK = qcf kick)
     bool kimActive = false;         // Kimberly profile (anti-air gear, air qcf punch / qcb kick; all six macros run by kimProcess)
-    int  profileIdx = 0;            // 0 Sagat, 1 Luke, 2 Cammy, 3 Aki, 4 Chun-Li, 5 Ingrid, 6 Kimberly, 7 Lily, 8 Arjin, 9 Manon, 10 stored config (Viper)
+    int  profileIdx = 0;            // 0 Sagat, 1 Luke, 2 Cammy, 3 Jamie, 4 Aki, 5 Chun-Li, 6 Ingrid, 7 Kimberly, 8 Lily, 9 Arjin, 10 Manon, 11 stored config (Viper)
     MacroOptions g_pinkOpts;
     MacroOptions g_arjinOpts;
     MacroOptions g_lukeOpts;
@@ -290,6 +292,9 @@ namespace {
     uint32_t turboPinMask = 0;
     bool togglePinCombo = false;   // Macro 1 pressed while pin 20 held (mode switch)
     bool prevComboMacro1 = false;
+    int      sideDiag = 0;         // user's held down-diagonal: +1 = ↙, -1 = ↘ (SOCD cleaned)
+    uint64_t sideDiagAt = 0;
+    bool prevComboMacro2 = false;  // pin 20 + Macro 2 = previous profile
 
     bool isGearMacro(const Macro& macro) {
         return macro.macroLabel[0] == 'G' && macro.macroLabel[1] == ' ';
@@ -439,6 +444,7 @@ namespace {
     constexpr uint8_t FL_JUMP      = 4;   // character leaves the ground here (lock after this step)
     constexpr uint8_t FL_LOCK      = 8;   // jump lock starts at the start of this step
     constexpr uint8_t FL_BACK      = 16;  // loop opened here can be released with ← (seismo after MK)
+    constexpr uint8_t FL_USER_DIR  = 32;  // the stick stays the user's during this step (buttons still ours)
 
     struct VStep { uint8_t dir; uint32_t btn; uint32_t dur; uint32_t heCut; uint8_t flags; };
 
@@ -817,7 +823,7 @@ namespace {
         if (!V.playing) return false;
         VStep& st = V.seq[V.seqPos];
         uint64_t el = now - V.stepStart;
-        gp->state.dpad = (el + st.heCut < st.dur) ? toAbs(st.dir) : 0;
+        if (!(st.flags & FL_USER_DIR)) gp->state.dpad = (el + st.heCut < st.dur) ? toAbs(st.dir) : 0;
         gp->state.buttons = st.btn;
         return true;
     }
@@ -1443,6 +1449,7 @@ namespace {
     bool cammyAir = false;
     bool cammyGrab = false;                         // a LP+MP command grab is playing (HP may still upgrade it to OD)
     uint64_t cammyGrabAt = 0, cammyLPAt = 0, cammyMPAt = 0, cammyHPAt = 0;
+    uint64_t cammyLKAt = 0, cammyMKAt = 0, cammyHKAt = 0;
     // All profiles: after your qcf / qcb, a down-diagonal slip (↘ after →, ↙ after ←) that starts within 2f
     // of reaching the forward is sent as the forward; held longer than 2f, the diagonal goes through.
     int cqfStage = 0; uint8_t cqfH = 0, cqfPrev = 0xFF, cqfFwdH = 0;
@@ -1508,12 +1515,15 @@ namespace {
             cammyAir = false; cammyGrab = false;
         }
         if (macroBusy) return false;
-        // stick on N + LP + MP together = command grab (Manon's motion, follows the side) + LK; with HP too = OD (LK + MK)
+        // Jamie only: stick on N + LP + MP together = command grab (Manon's motion, follows the side) + LK; with HP too = OD (LK + MK)
         if (physRise & LP) cammyLPAt = now;
         if (physRise & MP) cammyMPAt = now;
         if (physRise & HP) cammyHPAt = now;
+        if (physRise & LK) cammyLKAt = now;
+        if (physRise & MK) cammyMKAt = now;
+        if (physRise & HK) cammyHKAt = now;
         bool cammyNeutral = runSOCDCleaner(Gamepad::resolveSOCDMode(gp->getOptions()), gp->state.dpad) == 0;
-        if (cammyNeutral && (physRise & (LP | MP)) && (phys & LP) && (phys & MP) &&   // only with the stick on N
+        if (jamieActive && cammyNeutral && (physRise & (LP | MP)) && (phys & LP) && (phys & MP) &&   // only with the stick on N
             (cammyLPAt > cammyMPAt ? cammyLPAt - cammyMPAt : cammyMPAt - cammyLPAt) <= CHORD_US) {
             uint64_t first = cammyLPAt < cammyMPAt ? cammyLPAt : cammyMPAt;
             bool od = (phys & HP) && (cammyHPAt + CHORD_US >= first) && (cammyHPAt <= first + CHORD_US);
@@ -1522,6 +1532,31 @@ namespace {
             cammyGrab = true; cammyGrabAt = now; cammyAir = false;
             startSeq(now, 0, 0);
             return runSeq(gp, now, prel);
+        }
+        // crouching (↓ or a down-diagonal) + two buttons together (within half a frame, no delay), follows the side:
+        //   Jamie: LK+MK = qcf + MK, MK+HK = qcf + MK+HK (OD).  Cammy: LP+MP = qcb + MP, MP+HP = qcb + MP+HP (OD).
+        if (ad & GAMEPAD_MASK_DOWN) {
+            auto together = [&](uint32_t a, uint64_t ta, uint32_t b, uint64_t tb) {
+                return (physRise & (a | b)) && (phys & a) && (phys & b) && (ta > tb ? ta - tb : tb - ta) <= CHORD_US;
+            };
+            uint32_t out = 0;
+            if (jamieActive) {
+                if (together(MK, cammyMKAt, HK, cammyHKAt)) out = MK | HK;
+                else if (together(LK, cammyLKAt, MK, cammyMKAt)) out = MK;
+            } else {
+                if (together(MP, cammyMPAt, HP, cammyHPAt)) out = MP | HP;
+                else if (together(LP, cammyLPAt, MP, cammyMPAt)) out = MP;
+            }
+            if (out) {
+                V.suppress |= phys & (jamieActive ? KICK_MASK : PUNCH_MASK);   // hidden until released
+                vClear();
+                auto ar = [](){ return randomRange(F10(12), F10(18)); };
+                vPush(D_, 0, ar()); vPush(jamieActive ? DF : DB, 0, ar());
+                vPush(jamieActive ? F_ : B_, out, vBtn());
+                cammyAir = false; cammyGrab = false;
+                startSeq(now, 0, 0);
+                return runSeq(gp, now, prel);
+            }
         }
         uint32_t k = physRise & KICK_MASK;
         if (k && cammyJumpAt && now - cammyJumpAt <= 25ULL * FRAME_US) {
@@ -1799,7 +1834,8 @@ namespace {
     }
     // ---------------- Kimberly (all six macros run here)
     // Macro 1/2 = anti-air gear (Macro 1 -> facing right, Macro 2 -> facing left):
-    //   punch gear (any punch): ↓+HP, ↓, ↘, → + LK (1.3-3f), LP pressed 1-2f after the LK press and held 1.2-3f
+    //   punch gear (any punch): ↓+HP, ↓, ↘, → + LK (1.3-3f), LP pressed 6-8f after the LK press and held 1.2-3f
+    //   (between LK and LP the stick is the user's)
     //   kick gear: qcb + that kick
     // Macro 3 = qcf qcf + LP/HP, Macro 4 = qcb qcb + LP/HP, Macro 5 = qcf qcf + LK/HK, Macro 6 = qcb qcb + LK/HK (fixed on screen)
     // Air: diagonal jump, then a punch within 25f = qcf toward the jump + that punch;
@@ -1875,20 +1911,11 @@ namespace {
                 vPush(absDir(true, 0), HP, randomRange(F10(30), F10(50)));
                 vPush(absDir(true, 0), 0, ar()); vPush(absDir(true, side), 0, ar());
                 uint32_t lkTotal = randomRange(F10(13), F10(30));   // LK held 1.3-3f
-                uint32_t lpAfter = randomRange(F10(10), F10(20));   // LP pressed 1-2f after the LK press
+                uint32_t lpAfter = randomRange(F10(60), F10(80));   // LP pressed 6-8f after the LK press
                 uint32_t lpTotal = randomRange(F10(12), F10(30));   // LP held 1.2-3f
-                if (lpAfter < lkTotal) {
-                    uint32_t lkRest = lkTotal - lpAfter;            // LK time left once LP is pressed
-                    uint32_t both = lkRest < lpTotal ? lkRest : lpTotal;
-                    vPush(absDir(false, side), LK, lpAfter);
-                    vPush(N_, LK | LP, both);
-                    if (lpTotal > both) vPush(N_, LP, lpTotal - both);
-                    else if (lkRest > both) vPush(N_, LK, lkRest - both);
-                } else {
-                    vPush(absDir(false, side), LK, lkTotal);
-                    if (lpAfter > lkTotal) vPush(N_, 0, lpAfter - lkTotal);
-                    vPush(N_, LP, lpTotal);
-                }
+                vPush(absDir(false, side), LK, lkTotal);
+                vPush(N_, 0, lpAfter - lkTotal, FL_USER_DIR);       // between LK and LP the stick is yours
+                vPush(N_, LP, lpTotal);
             }
             kimAir = false;
             startSeq(now, 0, 0);
@@ -2029,6 +2056,7 @@ void InputMacro::setup() {
     chunActive = false; g_chunMode = false;
     akiActive = false; g_akiMode = false;
     cammyActive = false; g_cammyMode = false;
+    jamieActive = false; g_jamieMode = false;
     profileIdx = 0; pinkActive = false; arjinActive = false; lukeActive = false; g_lukeMode = false; lilyActive = false; g_lilyMode = false; g_pinkMode = false; g_profilePic = 0;
     sagatActive = true;                 // power-up in the built-in Sagat set
     g_sagatMode = true;
@@ -2292,31 +2320,34 @@ void InputMacro::preprocess()
         }
         bool m1 = macroPinMasks[0] && (gamepad->debouncedGpio & macroPinMasks[0]);
         if (t && !prevTogglePin) togglePinCombo = false;
-        if (t && m1 && !prevComboMacro1) {
-            // pin 20 held + Macro 1: switch between the built-in Sagat set and the stored (Viper) set
+        bool m2 = macroPinMasks[1] && (gamepad->debouncedGpio & macroPinMasks[1]);
+        bool comboNext = t && m1 && !prevComboMacro1, comboPrev = t && m2 && !prevComboMacro2;
+        if (comboNext || comboPrev) {
+            // pin 20 held + Macro 1: next profile; pin 20 held + Macro 2: previous profile
             togglePinCombo = true;
             reset();
             V.playing = false; V.win = W_NONE; V.chordPending = false; V.lv2Pending = false; V.delayedAt = 0; V.pendMask = 0;
             V.suppress = 0; V.rawPending = false;
             gearPendingMacro = -1;
             spamReset();
-            profileIdx = (profileIdx + 1) % 11;    // Sagat -> Luke -> Cammy -> Aki -> Chun-Li -> Ingrid -> Kimberly -> Lily -> Arjin -> Manon -> Viper
-            sagatActive = (profileIdx != 10);
+            profileIdx = (profileIdx + (comboNext ? 1 : 11)) % 12;   // Sagat -> Luke -> Cammy -> Jamie -> Aki -> Chun-Li -> Ingrid -> Kimberly -> Lily -> Arjin -> Manon -> Viper
+            sagatActive = (profileIdx != 11);
             lukeActive = (profileIdx == 1);
-            cammyActive = (profileIdx == 2);
-            akiActive = (profileIdx == 3);
-            chunActive = (profileIdx == 4);
-            ingridActive = (profileIdx == 5);
-            kimActive = (profileIdx == 6);
-            lilyActive = (profileIdx == 7);
-            arjinActive = (profileIdx == 8);
-            pinkActive = (profileIdx == 9);
-            { static const int pic[11] = {0, 4, 6, 7, 8, 9, 10, 5, 1, 2, 3}; g_profilePic = pic[profileIdx]; }
+            jamieActive = (profileIdx == 3);
+            cammyActive = (profileIdx == 2) || jamieActive;   // Jamie runs on Cammy's engine and options
+            akiActive = (profileIdx == 4);
+            chunActive = (profileIdx == 5);
+            ingridActive = (profileIdx == 6);
+            kimActive = (profileIdx == 7);
+            lilyActive = (profileIdx == 8);
+            arjinActive = (profileIdx == 9);
+            pinkActive = (profileIdx == 10);
+            { static const int pic[12] = {0, 4, 6, 11, 7, 8, 9, 10, 5, 1, 2, 3}; g_profilePic = pic[profileIdx]; }
             g_ingridMode = ingridActive;
             g_kimMode = kimActive; kimAir = false; kimJumpAt = 0; kimGear = HP;
             g_chunMode = chunActive; chunAir = false; chunJumpAt = 0; chunGear = MK; chunHPAt = 0; chunHPFireAt = 0; chunDownAt = 0; chunMPAt = 0; chunHKAt = 0;
             g_akiMode = akiActive; akiHKAt = 0;
-            g_cammyMode = cammyActive; cammyAir = false; cammyJumpAt = 0; cammyGrab = false;
+            g_cammyMode = cammyActive && !jamieActive; g_jamieMode = jamieActive; cammyAir = false; cammyJumpAt = 0; cammyGrab = false;
             g_lilyMode = lilyActive; lilySpd = false; lilyOD = false;
             g_lukeMode = lukeActive; lukeHoldBtn = 0; lukeSuppress = 0; lukeTaken = false;
             g_sagatBurnout = false;
@@ -2329,21 +2360,22 @@ void InputMacro::preprocess()
             if (lilyActive)  { gearMask[0] = MP; gearMask[1] = MP; }   // Lily DP gear starts on MP
             inputMacroOptions = (profileIdx == 0) ? &g_sagatOpts
                               : (profileIdx == 1) ? &g_lukeOpts
-                              : (profileIdx == 2) ? &g_cammyOpts
-                              : (profileIdx == 3) ? &g_akiOpts
-                              : (profileIdx == 4) ? &g_chunOpts
-                              : (profileIdx == 5) ? &g_ingridOpts
-                              : (profileIdx == 6) ? &g_kimOpts
-                              : (profileIdx == 7) ? &g_lilyOpts
-                              : (profileIdx == 8) ? &g_arjinOpts
-                              : (profileIdx == 9) ? &g_pinkOpts
+                              : (profileIdx == 2 || profileIdx == 3) ? &g_cammyOpts
+                              : (profileIdx == 4) ? &g_akiOpts
+                              : (profileIdx == 5) ? &g_chunOpts
+                              : (profileIdx == 6) ? &g_ingridOpts
+                              : (profileIdx == 7) ? &g_kimOpts
+                              : (profileIdx == 8) ? &g_lilyOpts
+                              : (profileIdx == 9) ? &g_arjinOpts
+                              : (profileIdx == 10) ? &g_pinkOpts
                               : &Storage::getInstance().getAddonOptions().macroOptions;
             macrosOn = true;
             detectViperMode(inputMacroOptions);
-            prevMacroInputPressed = true;    // the Macro 1 press used for the switch never fires
+            prevMacroInputPressed = true;    // the Macro 1 / Macro 2 press used for the switch never fires
             V.prevQcbPins = 0xFFFFFFFFu; V.prevSuper = 0xFFFFFFFFu; V.prevQcb = true;   // nor counts as a qcb/super press
         }
         prevComboMacro1 = m1;
+        prevComboMacro2 = m2;
 
         if (!t && prevTogglePin && !togglePinCombo && sagatActive) {
             V.facingRight = !V.facingRight;          // Sagat mode: pin 20 alone = side switch
@@ -2371,6 +2403,17 @@ void InputMacro::preprocess()
     }
 
     // CUSTOM: all profiles: a ↘/↙ slip right after your qcf/qcb forward is sent as the forward
+    // CUSTOM: auto side (all profiles): ↙ held 10f = you are on the left (facing right), ↘ held 10f = facing left
+    {
+        uint8_t sd = runSOCDCleaner(Gamepad::resolveSOCDMode(gamepad->getOptions()), gamepad->state.dpad);
+        int dg = (sd == (GAMEPAD_MASK_DOWN | GAMEPAD_MASK_LEFT)) ? +1 : (sd == (GAMEPAD_MASK_DOWN | GAMEPAD_MASK_RIGHT)) ? -1 : 0;
+        if (dg != sideDiag) { sideDiag = dg; sideDiagAt = now; }
+        if (dg && now - sideDiagAt >= 10ULL * FRAME_US && !V.playing && V.win == W_NONE && !isMacroRunning &&
+                V.facingRight != (dg > 0)) {
+            V.facingRight = (dg > 0);
+            g_viperFacingRight = V.facingRight;
+        }
+    }
     if (!V.playing && !isMacroRunning) cammyCleanQcf(gamepad, now);
 
     // CUSTOM: remember when each direction was last physically held
