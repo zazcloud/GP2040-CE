@@ -183,7 +183,7 @@ namespace {
     bool akiActive = false;         // Aki profile (all six macros run by the Aki engine, ↓HK -> X = Level 1)
     bool ingridActive = false;      // Ingrid profile (Aki engine: qcf/qcb + LK, punch supers, standing HK -> X = Level 1)
     bool chunActive = false;        // Chun-Li profile (↓↓ kick gear, air qcf kick dive; all six macros run by chunProcess)
-    bool jamieActive = false;       // Jamie profile (Cammy's engine; keeps the command grab, crouch LK+MK / MK+HK = qcf kick)
+    bool jamieActive = false;       // Jamie profile (Cammy's engine; its free button does the command grab / qcf kick)
     bool kimActive = false;         // Kimberly profile (anti-air gear, air qcf punch / qcb kick; all six macros run by kimProcess)
     MacroOptions g_pinkOpts;        // Manon
     MacroOptions g_cammyOpts;       // Cammy, Jamie
@@ -1121,7 +1121,6 @@ namespace {
     }
 
     // ---------------- shared pieces of the per-profile engines
-    constexpr uint64_t CHORD_US = FRAME_US / 2;      // buttons "together" = within half a frame, no delay
     // relative code for an absolute direction (horiz: +1 right, -1 left, 0 none)
     uint8_t absDir(bool down, int horiz) {
         uint8_t r = down ? D_ : 0;
@@ -1146,6 +1145,11 @@ namespace {
         superArrowsAndFinish({absDir(true, 0), absDir(true, h), absDir(false, h), absDir(true, 0), absDir(true, h)},
                              absDir(false, h), btn);
     }
+    // Free button (Cammy, Jamie, Chun-Li): of Macro 5 / Macro 6, the one that points away from the side you
+    // face is useless as it is, so it does a side-following special instead. Facing right -> Macro 6 is free,
+    // facing left -> Macro 5. Its move is chosen like a gear: hold an attack + press it (stays until changed).
+    uint32_t freeOwnedPins = 0;                      // free-button presses the engine took: no plain macro until released
+    uint32_t freePin(uint32_t m5, uint32_t m6) { return V.facingRight ? m6 : m5; }
     // Per-engine input edges, plus the "diagonal jump, then a button = special in the air" rule.
     constexpr int ENG_STICK = 1, ENG_JUMP = 2;
     struct Eng {
@@ -1469,11 +1473,7 @@ namespace {
     // ---------------- Cammy: diagonal jump, then a kick within 25f of the jump = qcb + that kick
     // (another kick within 2f of the first = OD, both kicks); Macro 3 = qcf qcf + P, Macro 4 = qcb qcb + P
     Eng eCammy;
-    bool cammyGrab = false;                         // a LP+MP command grab is playing (HP may still upgrade it to OD)
-    uint64_t cammyGrabAt = 0;
-    enum { C_LP, C_MP, C_HP, C_LK, C_MK, C_HK };
-    constexpr uint32_t CAMMY_BTN[6] = {LP, MP, HP, LK, MK, HK};
-    uint64_t cammyAt[6] = {0, 0, 0, 0, 0, 0};       // when each attack button was last pressed
+    uint32_t cammyFree = LP;                        // attack chosen for the free button (Cammy default LP, Jamie LK)
     // All profiles: after your qcf / qcb, a down-diagonal slip (↘ after →, ↙ after ←) that starts within 2f
     // of reaching the forward is sent as the forward; held longer than 2f, the diagonal goes through.
     int cqfStage = 0; uint8_t cqfH = 0, cqfPrev = 0xFF, cqfFwdH = 0;
@@ -1501,51 +1501,37 @@ namespace {
             if (ad != cqfFwdH) cqfFwdAt = 0;
         }
     }
-    bool cammyProcess(Gamepad* gp, uint64_t now, uint32_t m3, uint32_t m4, bool macroBusy) {
+    // Free button: Cammy: LP = qcb + MP, MP = qcb + HP, HP = qcb + MP+HP (OD).
+    //   Jamie: LP / MP = command grab (+ LK), HP = OD command grab (LK+MK), LK / MK = qcf + MK, HK = qcf + MK+HK (OD).
+    bool cammyProcess(Gamepad* gp, uint64_t now, uint32_t m3, uint32_t m4, uint32_t m5, uint32_t m6, bool macroBusy) {
         Eng& e = eCammy;
-        e.read(gp, m3 | m4, now, ENG_STICK | ENG_JUMP);
+        e.read(gp, m3 | m4 | m5 | m6, now, ENG_STICK | ENG_JUMP);
         uint32_t phys = e.phys, physRise = e.physRise;
+        uint32_t freeRise = e.rise & freePin(m5, m6);
+        freeOwnedPins = (freeOwnedPins | freeRise) & (uint32_t)gp->debouncedGpio;
         if (V.playing) {
             e.airOD(physRise & KICK_MASK, now);
-            if (cammyGrab && (physRise & HP) && now - cammyGrabAt <= CHORD_US && V.seqPos < V.seqLen - 1) {
-                V.suppress |= HP;                   // HP together with LP+MP: OD grab (LK+MK)
-                V.seq[V.seqLen - 1].btn = LK | MK;
-            }
             if (e.run(gp, now)) return true;
-            cammyGrab = false;
         }
         if (macroBusy) return false;
-        for (int i = 0; i < 6; i++) if (physRise & CAMMY_BTN[i]) cammyAt[i] = now;
-        // two buttons pressed together (within half a frame, no delay), one of them just now
-        auto together = [&](int a, int b) {
-            uint32_t ba = CAMMY_BTN[a], bb = CAMMY_BTN[b];
-            uint64_t ta = cammyAt[a], tb = cammyAt[b];
-            return (physRise & (ba | bb)) && (phys & ba) && (phys & bb) && (ta > tb ? ta - tb : tb - ta) <= CHORD_US;
-        };
-        // Jamie only: stick on N + LP + MP together = command grab (Manon's motion, follows the side) + LK; with HP too = OD (LK + MK)
-        if (jamieActive && e.ad == 0 && together(C_LP, C_MP)) {
-            uint64_t first = cammyAt[C_LP] < cammyAt[C_MP] ? cammyAt[C_LP] : cammyAt[C_MP];
-            bool od = (phys & HP) && (cammyAt[C_HP] + CHORD_US >= first) && (cammyAt[C_HP] <= first + CHORD_US);
-            V.suppress |= phys & PUNCH_MASK;        // the punches stay hidden until released
-            seqCommandGrab(od ? (LK | MK) : LK, (e.prel & RF) && !(e.prel & RD));
-            cammyGrab = true; cammyGrabAt = now; e.air = false;
-            return play(gp, now, e.prel);
-        }
-        // crouching (↓ or a down-diagonal) + two buttons together, follows the side:
-        //   Jamie: LK+MK = qcf + MK, MK+HK = qcf + MK+HK (OD).  Cammy: LP+MP = qcb + MP, MP+HP = qcb + MP+HP (OD).
-        if (e.ad & GAMEPAD_MASK_DOWN) {
-            uint32_t out = 0;
-            if (jamieActive) out = together(C_MK, C_HK) ? (MK | HK) : together(C_LK, C_MK) ? MK : 0;
-            else             out = together(C_MP, C_HP) ? (MP | HP) : together(C_LP, C_MP) ? MP : 0;
-            if (out) {
-                V.suppress |= phys & (jamieActive ? KICK_MASK : PUNCH_MASK);   // hidden until released
-                seqQuarter(sideH(jamieActive), out, 12, 18);                   // Jamie forward, Cammy back
-                e.air = false; cammyGrab = false;
-                return play(gp, now, e.prel);
-            }
-        }
         // diagonal jump, then a kick within 25f: qcb away from the jump (↗ -> ↓ ↙ ←, ↖ -> ↓ ↘ →) + that kick
         if ((physRise & KICK_MASK) && e.jumped(now, 25)) return e.startAir(gp, now, physRise & KICK_MASK, -e.jumpDir);
+        if (freeRise) {
+            uint32_t held = phys & ATTACK_MASK;
+            if (held) {                             // attack held + free button = choose its move (Cammy: punches only)
+                if (popcount32(held) == 1 && (jamieActive || (held & PUNCH_MASK))) cammyFree = held;
+                V.suppress |= held;
+                return false;
+            }
+            if (!jamieActive)                       // Cammy: qcb + punch
+                seqQuarter(sideH(false), cammyFree == LP ? MP : cammyFree == MP ? HP : (MP | HP), 12, 18);
+            else if (cammyFree & PUNCH_MASK)        // Jamie: command grab
+                seqCommandGrab(cammyFree == HP ? (LK | MK) : LK, (e.prel & RF) && !(e.prel & RD));
+            else                                    // Jamie: qcf + kick
+                seqQuarter(sideH(true), cammyFree == HK ? (MK | HK) : MK, 12, 18);
+            e.air = false;
+            return play(gp, now, e.prel);
+        }
         if (e.rise & (m3 | m4)) {
             // fixed on screen (not the side switch): Macro 3 = ↓ ↘ → ↓ ↘ →, Macro 4 = ↓ ↙ ← ↓ ↙ ← (+ LP / HP)
             seqSuperFixed((e.rise & m3) ? +1 : -1, coin() ? LP : HP);
@@ -1651,6 +1637,7 @@ namespace {
     //   after it the side follows the jump (↗ -> facing right, ↖ -> facing left).
     Eng eChun;
     uint32_t chunGear = MK;
+    uint32_t chunFree = LK;                         // kick chosen for the free button: LK / MK = qcb + HK, HK = qcb + LK+MK (OD)
     // qcb + HP cancels (follow the side); the second press never reaches the game:
     //   HP, then HP again within 12f          -> starts at a random frame 8-12 from the first HP
     //   crouch HP, then HP again within 18f   -> frame 18-23
@@ -1726,6 +1713,17 @@ namespace {
             vPush(D_, crouch ? (LK | MK) : chunGear, randomRange(F10(20), F10(40)));
             V.facingRight = (rise & m[0]) != 0;     // Macro 1 -> facing right, Macro 2 -> facing left
             g_viperFacingRight = V.facingRight;
+            e.air = false;
+            return play(gp, now, e.prel);
+        }
+        if (rise & freePin(m[4], m[5])) {           // free button: qcb + kick (follows the side)
+            uint32_t held = phys & ATTACK_MASK;
+            if (held) {                             // kick held + free button = choose its move
+                if (popcount32(held) == 1 && (held & KICK_MASK)) chunFree = held;
+                V.suppress |= held;
+                return false;
+            }
+            seqQuarter(sideH(false), chunFree == HK ? (LK | MK) : HK, 12, 18);
             e.air = false;
             return play(gp, now, e.prel);
         }
@@ -1951,6 +1949,8 @@ void InputMacro::checkMacroPress() {
             continue;
         if ( viperMode && (i == 4 || i == 5) )  // CUSTOM: side / burnout buttons in Viper mode
             continue;
+        if ( macroPinMasks[i] & freeOwnedPins )  // CUSTOM: this press belongs to the free-button rule
+            continue;
         Macro * macro = &inputMacroOptions->macroList[i];
         if ( macro->useMacroTriggerButton ) {
             // Use Gamepad Button for Macro Trigger
@@ -2172,7 +2172,7 @@ void InputMacro::preprocess()
             eKim.air = false; eKim.jumpAt = 0; kimGear = HP;
             eChun.air = false; eChun.jumpAt = 0; chunGear = MK; chunHPAt = 0; chunHPFireAt = 0; chunMPAt = 0; chunHKAt = 0;
             akiHKAt = 0;
-            eCammy.air = false; eCammy.jumpAt = 0; cammyGrab = false;
+            eCammy.air = false; eCammy.jumpAt = 0; cammyFree = jamieActive ? LK : LP; chunFree = LK; freeOwnedPins = 0;
             lilySpd = false; lilyOD = false;
             lukeHoldBtn = 0; lukeSuppress = 0; lukeTaken = false;
             g_sagatBurnout = false;
@@ -2283,7 +2283,7 @@ void InputMacro::preprocess()
         gamepad->state.buttons &= ~V.suppress;   // X used for the ↓HK rule stays hidden until released
     }
     if (cammyActive) {
-        if (cammyProcess(gamepad, now, macroPinMasks[2], macroPinMasks[3], isMacroRunning)) {
+        if (cammyProcess(gamepad, now, macroPinMasks[2], macroPinMasks[3], macroPinMasks[4], macroPinMasks[5], isMacroRunning)) {
             prevMacroInputPressed = true;
             return;
         }
@@ -2344,7 +2344,8 @@ void InputMacro::preprocess()
             isGearMacro(inputMacroOptions->macroList[pressedMacro]) &&
             !inputMacroOptions->macroList[pressedMacro].useMacroTriggerButton) {
         // attack held, then gear button: gear changes right away, for every gear macro
-        if (popcount32(attackHeld) == 1 && !(arjinActive && (attackHeld & KICK_MASK))) {
+        if (popcount32(attackHeld) == 1 && !(arjinActive && (attackHeld & KICK_MASK)) &&
+                !(cammyActive && (attackHeld & PUNCH_MASK))) {   // Arjin: punch gears only; Cammy / Jamie: kick gears only
             for (int i = 0; i < MAX_MACRO_LIMIT; i++)
                 if (isGearMacro(inputMacroOptions->macroList[i])) gearMask[i] = attackHeld;
         }
