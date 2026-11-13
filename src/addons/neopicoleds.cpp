@@ -29,6 +29,7 @@ extern volatile bool g_cammyMode;
 extern volatile bool g_akiMode;
 extern volatile bool g_chunMode;
 extern volatile bool g_ingridMode;
+extern volatile bool g_kimMode;
 extern volatile uint32_t g_sagatGearMask;
 
 // CUSTOM: the LED under each physical button follows the board's original wiring
@@ -647,10 +648,10 @@ void NeoPicoLEDAddon::process() {
     // CUSTOM: Sagat mode colors (half brightness): light yellow (orange in burnout),
     // gear button red, side arrow white
     if (g_sagatMode && !g_viperActive) {
-        float bx = as.GetBrightnessX() * 0.25f;  // 50% dimmer than before
+        float bx = as.GetBrightnessX() * (g_kimMode ? 0.18f : 0.25f);  // 50% dimmer than before (Kimberly a little dimmer)
         LEDFormat fmt = neopico.GetFormat();
         RGB baseRgb = g_sagatBurnout
-            ? (g_pinkMode ? RGB(150, 0, 255) : g_lukeMode ? RGB(0, 30, 255) : g_lilyMode ? RGB(0, 95, 90) : g_cammyMode ? RGB(0, 80, 110) : g_akiMode ? RGB(70, 0, 110) : g_chunMode ? RGB(0, 60, 255) : g_ingridMode ? RGB(230, 215, 255) : RGB(255, 120, 0))      // Luke burnout dark blue, Lily darker tiffany
+            ? (g_kimMode ? RGB(128, 128, 128) : g_pinkMode ? RGB(150, 0, 255) : g_lukeMode ? RGB(0, 30, 255) : g_lilyMode ? RGB(0, 95, 90) : g_cammyMode ? RGB(0, 80, 110) : g_akiMode ? RGB(70, 0, 110) : g_chunMode ? RGB(0, 60, 255) : g_ingridMode ? RGB(230, 215, 255) : RGB(255, 120, 0))      // Luke burnout dark blue, Lily darker tiffany
             : (g_pinkMode ? RGB(255, 60, 160) : g_lukeMode ? RGB(90, 200, 255) : g_lilyMode ? RGB(10, 186, 181) : g_cammyMode ? RGB(0, 255, 255) : g_akiMode ? RGB(170, 60, 255) : g_chunMode ? RGB(135, 206, 250) : g_ingridMode ? RGB(181, 126, 220) : RGB(255, 235, 140)); // Luke light blue, Lily tiffany
         uint32_t base  = baseRgb.value(fmt, bx);
         uint32_t red   = RGB(255, 0, 0).value(fmt, bx);
@@ -663,6 +664,26 @@ void NeoPicoLEDAddon::process() {
                 uint32_t c = (pixel.mask == sideMask) ? white : base;
                 for (auto pos : pixel.positions)
                     if (pos < 100) frame[pos] = c;
+            }
+        }
+        if (g_kimMode && !g_sagatBurnout) {     // Kimberly: fixed rainbow, one colour per button
+            int total = 0, n = 0;
+            for (auto &row : matrix.pixels)
+                for (auto &pixel : row)
+                    if (pixel.index >= 0 && pixel.mask != 0) total++;
+            for (auto &row : matrix.pixels) {
+                for (auto &pixel : row) {
+                    if (pixel.index < 0 || pixel.mask == 0) continue;
+                    int hue = total ? (n * 1530) / total : 0;   // 0..1529 around the colour wheel
+                    n++;
+                    if (pixel.mask == sideMask) continue;       // side arrow stays white
+                    int seg = hue / 255, f = hue % 255;
+                    RGB rc = seg == 0 ? RGB(255, f, 0) : seg == 1 ? RGB(255 - f, 255, 0) : seg == 2 ? RGB(0, 255, f)
+                           : seg == 3 ? RGB(0, 255 - f, 255) : seg == 4 ? RGB(f, 0, 255) : RGB(255, 0, 255 - f);
+                    uint32_t c = rc.value(fmt, bx);
+                    for (auto pos : pixel.positions)
+                        if (pos < 100) frame[pos] = c;
+                }
             }
         }
         int gidx = gear ? physLedForMask(gear) : -1;   // the physical button the gear is on

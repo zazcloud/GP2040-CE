@@ -35,13 +35,14 @@ volatile bool g_viperBurnout     = false;
 volatile bool g_sagatMode        = false;   // built-in Sagat macro set active (LEDs light yellow)
 volatile bool g_sagatBurnout     = false;   // Sagat burnout (orange LEDs, X = Level 1)
 volatile bool g_pinkMode         = false;   // Manon profile active (pink LEDs)
-volatile int  g_profilePic       = 0;       // screen picture: 0 Sagat, 1 Arjin, 2 Manon, 3 Viper (stored splash), 4 Luke
+volatile int  g_profilePic       = 0;       // screen picture: 0 Sagat, 1 Arjin, 2 Manon, 3 Viper (stored splash), 4 Luke, 5 Lily, 6 Cammy, 7 Aki, 8 Chun-Li, 9 Ingrid, 10 Kimberly
 volatile bool g_lukeMode         = false;   // Luke profile active (blue LEDs)
 volatile bool g_lilyMode         = false;   // Lily profile active (tiffany LEDs)
 volatile bool g_cammyMode        = false;   // Cammy profile active (cyan LEDs)
 volatile bool g_akiMode          = false;   // Aki profile active (purple LEDs)
 volatile bool g_chunMode         = false;   // Chun-Li profile active (sky blue LEDs)
 volatile bool g_ingridMode       = false;   // Ingrid profile active (lavender LEDs)
+volatile bool g_kimMode          = false;   // Kimberly profile active (rainbow LEDs, grey in burnout)
 volatile uint32_t g_sagatGearMask = 0;      // attack button of the current gear (red LED)
 
 namespace {
@@ -230,7 +231,8 @@ namespace {
     bool akiActive = false;         // Aki profile (all six macros run by the Aki engine, ↓HK -> X = Level 1)
     bool ingridActive = false;      // Ingrid profile (Aki engine: qcf/qcb + LK, punch supers, standing HK -> X = Level 1)
     bool chunActive = false;        // Chun-Li profile (↓↓ kick gear, air qcf kick dive; all six macros run by chunProcess)
-    int  profileIdx = 0;            // 0 Sagat, 1 Luke, 2 Cammy, 3 Aki, 4 Lily, 5 Arjin, 6 Manon, 7 stored config (Viper)
+    bool kimActive = false;         // Kimberly profile (anti-air gear, air qcf punch / qcb kick; all six macros run by kimProcess)
+    int  profileIdx = 0;            // 0 Sagat, 1 Luke, 2 Cammy, 3 Aki, 4 Chun-Li, 5 Ingrid, 6 Kimberly, 7 Lily, 8 Arjin, 9 Manon, 10 stored config (Viper)
     MacroOptions g_pinkOpts;
     MacroOptions g_arjinOpts;
     MacroOptions g_lukeOpts;
@@ -240,6 +242,7 @@ namespace {
     MacroOptions g_akiOpts;
     MacroOptions g_chunOpts;
     MacroOptions g_ingridOpts;
+    MacroOptions g_kimOpts;
     void buildChunOptions() {
         g_chunOpts = g_sagatOpts;
         for (int i = 0; i < 6; i++) g_chunOpts.macroList[i].enabled = false;   // all run by the Chun-Li engine
@@ -1378,7 +1381,7 @@ namespace {
         }
         gp->state.buttons &= ~lukeSuppress;
     }
-    // ---------------- Lily: Macro 1/2 = Sagat gear, Macro 5/6 = SPD (← ↙ ↓ → ↗ + LP / HP, follows the side),
+    // ---------------- Lily: Macro 1/2 = Sagat gear, Macro 5/6 = SPD (← ↙ ↓ → ↗ + LP / HP, fixed on screen),
     // a punch held or pressed during it = OD (two punches); Macro 3 = qcb qcb + P, Macro 4 = qcf qcf + P
     uint32_t prevLilyPins = 0, lilyPunch = 0;
     bool lilySpd = false, lilyOD = false;
@@ -1408,8 +1411,9 @@ namespace {
             lilyPunch = (rise & m1) ? LP : HP;
             vClear();
             auto ar = [](){ return randomRange(F10(12), F10(20)); };
-            vPush(B_, 0, ar()); vPush(DB, 0, ar()); vPush(D_, 0, ar()); vPush(F_, 0, ar());
-            vPush(UF, lilyPunch, vBtn());
+            // fixed on screen (not the side switch): ← ↙ ↓ → ↗
+            vPush(absDir(false, -1), 0, ar()); vPush(absDir(true, -1), 0, ar()); vPush(absDir(true, 0), 0, ar()); vPush(absDir(false, +1), 0, ar());
+            vPush((uint8_t)(RU | absDir(false, +1)), lilyPunch, vBtn());
             uint32_t held = phys & PUNCH_MASK;
             lilyOD = held != 0;
             if (lilyOD) { V.suppress |= held; V.seq[V.seqLen - 1].btn = lilyODBtn(held); }
@@ -1545,7 +1549,7 @@ namespace {
         return false;
     }
     // ---------------- Aki: Macro 1 qcf+HP, 2 qcb+HP, 3 qcf qcf+HP, 4 qcb qcb+HP, 5 qcf qcf+kick, 6 qcb qcb+kick
-    // (kick = LK / HK random; macros fixed on screen, only X follows the side switch); your ↓+HK then X within 20f = qcf qcf + kick
+    // (kick = LK / HK random; macros fixed on screen, only X follows the side switch); your ↓+HK then X within 25f = qcf qcf + kick
     uint32_t prevAkiPins = 0, prevAkiPhys = 0;
     uint64_t akiHKAt = 0;
     bool akiProcess(Gamepad* gp, uint64_t now, const uint32_t* m, bool macroBusy) {
@@ -1566,7 +1570,7 @@ namespace {
             if (runSeq(gp, now, prel)) return true;
         }
         if (macroBusy) return false;
-        if ((physRise & XBTN) && !g_sagatBurnout && akiHKAt && now - akiHKAt <= (ingridActive ? 44ULL : 20ULL) * FRAME_US) {   // Ingrid 44f, Aki 20f
+        if ((physRise & XBTN) && !g_sagatBurnout && akiHKAt && now - akiHKAt <= (ingridActive ? 44ULL : 25ULL) * FRAME_US) {   // Ingrid 44f, Aki 25f
             akiHKAt = 0;
             V.suppress |= XBTN;                 // X stays hidden until you let go of it
             seqSagatLevel1(true);               // qcf qcf + LK / HK
@@ -1793,6 +1797,115 @@ namespace {
         startSeq(now, 0, 0);
         return runSeq(gp, now, prel);
     }
+    // ---------------- Kimberly (all six macros run here)
+    // Macro 1/2 = anti-air gear (Macro 1 -> facing right, Macro 2 -> facing left):
+    //   punch gear (any punch): ↓+HP, ↓, ↘, → + LK (1.3-3f), LP pressed 1-2f after the LK press and held 1.2-3f
+    //   kick gear: qcb + that kick
+    // Macro 3 = qcf qcf + LP/HP, Macro 4 = qcb qcb + LP/HP, Macro 5 = qcf qcf + LK/HK, Macro 6 = qcb qcb + LK/HK (fixed on screen)
+    // Air: diagonal jump, then a punch within 25f = qcf toward the jump + that punch;
+    //      a kick within 20f = qcb away from the jump + that kick (second button of the same kind within 2f = OD)
+    uint32_t prevKimPins = 0, prevKimPhys = 0, kimBtn = 0, kimGear = HP;
+    uint8_t  prevKimAbs = 0;
+    int      kimJumpDir = 0;
+    uint64_t kimJumpAt = 0, kimBtnAt = 0;
+    bool     kimAir = false, kimAirPunch = false;
+    bool kimProcess(Gamepad* gp, uint64_t now, const uint32_t* m, bool macroBusy) {
+        uint32_t mask = m[0] | m[1] | m[2] | m[3] | m[4] | m[5];
+        uint32_t pins = (uint32_t)gp->debouncedGpio & mask;
+        uint32_t rise = pins & ~prevKimPins;
+        prevKimPins = pins;
+        uint32_t phys = gp->state.buttons;
+        uint32_t physRise = phys & ~prevKimPhys;
+        prevKimPhys = phys;
+        V.suppress &= phys;
+        uint8_t prel = toRel(gp->state.dpad);
+        uint8_t ad = runSOCDCleaner(Gamepad::resolveSOCDMode(gp->getOptions()), gp->state.dpad);
+        const uint8_t UR = GAMEPAD_MASK_UP | GAMEPAD_MASK_RIGHT, UL = GAMEPAD_MASK_UP | GAMEPAD_MASK_LEFT;
+        bool urNow = (ad & UR) == UR && !(ad & GAMEPAD_MASK_DOWN), ulNow = (ad & UL) == UL && !(ad & GAMEPAD_MASK_DOWN);
+        bool urPrev = (prevKimAbs & UR) == UR, ulPrev = (prevKimAbs & UL) == UL;
+        if (urNow && !urPrev) { kimJumpAt = now; kimJumpDir = +1; }
+        if (ulNow && !ulPrev) { kimJumpAt = now; kimJumpDir = -1; }
+        prevKimAbs = ad;
+        if (V.playing) {
+            if (kimAir) {
+                uint32_t k = physRise & (kimAirPunch ? PUNCH_MASK : KICK_MASK);
+                if (k && now - kimBtnAt <= 2ULL * FRAME_US && V.seqPos < V.seqLen) {   // OD: second button within 2f
+                    kimBtn |= k; V.suppress |= k;
+                    V.seq[V.seqLen - 1].btn = kimBtn;
+                }
+            }
+            bool wasAir = kimAir;
+            if (runSeq(gp, now, prel)) return true;
+            if (wasAir && kimJumpDir) { V.facingRight = (kimJumpDir > 0); g_viperFacingRight = V.facingRight; }
+            kimAir = false;
+        }
+        if (macroBusy) return false;
+        uint32_t ap = physRise & PUNCH_MASK, ak = physRise & KICK_MASK;
+        bool airP = ap && kimJumpAt && now - kimJumpAt <= 25ULL * FRAME_US;          // punch: 25f window
+        bool airK = !airP && ak && kimJumpAt && now - kimJumpAt <= 20ULL * FRAME_US; // kick: 20f window
+        if (airP || airK) {
+            kimBtn = airP ? ap : ak; kimBtnAt = now; kimJumpAt = 0; kimAirPunch = airP;
+            V.suppress |= kimBtn;
+            vClear();
+            auto ar = [](){ return randomRange(F10(12), F10(18)); };
+            int h = airP ? kimJumpDir : -kimJumpDir;   // punch: qcf toward the jump; kick: qcb away from it
+            vPush(absDir(true, 0), 0, ar()); vPush(absDir(true, h), 0, ar());
+            vPush(absDir(false, h), kimBtn, vBtn());
+            kimAir = true;
+            startSeq(now, 0, 0);
+            return runSeq(gp, now, prel);
+        }
+        if (!rise) return false;
+        if (rise & (m[0] | m[1])) {
+            uint32_t held = phys & ATTACK_MASK;
+            if (held) {                             // attack held + gear button = choose the gear
+                if (popcount32(held) == 1) kimGear = held;
+                V.suppress |= held;
+                return false;
+            }
+            int side = (rise & m[0]) ? +1 : -1;
+            V.facingRight = (side > 0);             // Macro 1 -> facing right, Macro 2 -> facing left
+            g_viperFacingRight = V.facingRight;
+            vClear();
+            auto ar = [](){ return randomRange(F10(12), F10(22)); };
+            if (kimGear & KICK_MASK) {              // qcb + the gear kick
+                vPush(absDir(true, 0), 0, ar()); vPush(absDir(true, -side), 0, ar());
+                vPush(absDir(false, -side), kimGear, vBtn());
+            } else {                                // any punch gear
+                vPush(absDir(true, 0), HP, randomRange(F10(30), F10(50)));
+                vPush(absDir(true, 0), 0, ar()); vPush(absDir(true, side), 0, ar());
+                uint32_t lkTotal = randomRange(F10(13), F10(30));   // LK held 1.3-3f
+                uint32_t lpAfter = randomRange(F10(10), F10(20));   // LP pressed 1-2f after the LK press
+                uint32_t lpTotal = randomRange(F10(12), F10(30));   // LP held 1.2-3f
+                if (lpAfter < lkTotal) {
+                    uint32_t lkRest = lkTotal - lpAfter;            // LK time left once LP is pressed
+                    uint32_t both = lkRest < lpTotal ? lkRest : lpTotal;
+                    vPush(absDir(false, side), LK, lpAfter);
+                    vPush(N_, LK | LP, both);
+                    if (lpTotal > both) vPush(N_, LP, lpTotal - both);
+                    else if (lkRest > both) vPush(N_, LK, lkRest - both);
+                } else {
+                    vPush(absDir(false, side), LK, lkTotal);
+                    if (lpAfter > lkTotal) vPush(N_, 0, lpAfter - lkTotal);
+                    vPush(N_, LP, lpTotal);
+                }
+            }
+            kimAir = false;
+            startSeq(now, 0, 0);
+            return runSeq(gp, now, prel);
+        }
+        int h; uint32_t btn;
+        if      (rise & m[2]) { h = +1; btn = coin() ? LP : HP; }
+        else if (rise & m[3]) { h = -1; btn = coin() ? LP : HP; }
+        else if (rise & m[4]) { h = +1; btn = coin() ? LK : HK; }
+        else if (rise & m[5]) { h = -1; btn = coin() ? LK : HK; }
+        else return false;
+        superArrowsAndFinish({absDir(true, 0), absDir(true, h), absDir(false, h), absDir(true, 0), absDir(true, h)}, absDir(false, h), btn);
+        if (rise & (m[2] | m[3])) armSpamFromSeq(rise & (m[2] | m[3]), false);   // supers repeat while held
+        kimAir = false;
+        startSeq(now, 0, 0);
+        return runSeq(gp, now, prel);
+    }
     // ---------------- X turbo (every profile, burnout off): random 1.2-2.2f on / off
     bool xTurboPrev = false, xTurboOn = true;
     uint64_t xTurboNext = 0;
@@ -1824,7 +1937,7 @@ namespace {
         if (g_sagatBurnout) {
             gp->state.buttons &= ~XBTN;           // X never reaches the game in burnout
             if (xRising && !macroBusy) {
-                seqSagatLevel1(pinkActive || arjinActive || cammyActive || akiActive || ingridActive, lilyActive); startSeq(now, 0, 0);
+                seqSagatLevel1(pinkActive || arjinActive || cammyActive || akiActive || ingridActive || kimActive, lilyActive); startSeq(now, 0, 0);
                 armSpamFromSeq(0, true);
                 if (runSeq(gp, now, toRel(gp->state.dpad))) return true;
             }
@@ -1911,6 +2024,8 @@ void InputMacro::setup() {
     buildChunOptions();
     g_ingridOpts = g_akiOpts;                       // all six macros run by the Aki engine
     ingridActive = false; g_ingridMode = false;
+    g_kimOpts = g_akiOpts;                          // all six macros run by the Kimberly engine
+    kimActive = false; g_kimMode = false;
     chunActive = false; g_chunMode = false;
     akiActive = false; g_akiMode = false;
     cammyActive = false; g_cammyMode = false;
@@ -2185,18 +2300,20 @@ void InputMacro::preprocess()
             V.suppress = 0; V.rawPending = false;
             gearPendingMacro = -1;
             spamReset();
-            profileIdx = (profileIdx + 1) % 10;    // Sagat -> Luke -> Cammy -> Aki -> Chun-Li -> Ingrid -> Lily -> Arjin -> Manon -> Viper
-            sagatActive = (profileIdx != 9);
+            profileIdx = (profileIdx + 1) % 11;    // Sagat -> Luke -> Cammy -> Aki -> Chun-Li -> Ingrid -> Kimberly -> Lily -> Arjin -> Manon -> Viper
+            sagatActive = (profileIdx != 10);
             lukeActive = (profileIdx == 1);
             cammyActive = (profileIdx == 2);
             akiActive = (profileIdx == 3);
             chunActive = (profileIdx == 4);
             ingridActive = (profileIdx == 5);
-            lilyActive = (profileIdx == 6);
-            arjinActive = (profileIdx == 7);
-            pinkActive = (profileIdx == 8);
-            { static const int pic[10] = {0, 4, 6, 7, 8, 9, 5, 1, 2, 3}; g_profilePic = pic[profileIdx]; }
+            kimActive = (profileIdx == 6);
+            lilyActive = (profileIdx == 7);
+            arjinActive = (profileIdx == 8);
+            pinkActive = (profileIdx == 9);
+            { static const int pic[11] = {0, 4, 6, 7, 8, 9, 10, 5, 1, 2, 3}; g_profilePic = pic[profileIdx]; }
             g_ingridMode = ingridActive;
+            g_kimMode = kimActive; kimAir = false; kimJumpAt = 0; kimGear = HP;
             g_chunMode = chunActive; chunAir = false; chunJumpAt = 0; chunGear = MK; chunHPAt = 0; chunHPFireAt = 0; chunDownAt = 0; chunMPAt = 0; chunHKAt = 0;
             g_akiMode = akiActive; akiHKAt = 0;
             g_cammyMode = cammyActive; cammyAir = false; cammyJumpAt = 0; cammyGrab = false;
@@ -2216,9 +2333,10 @@ void InputMacro::preprocess()
                               : (profileIdx == 3) ? &g_akiOpts
                               : (profileIdx == 4) ? &g_chunOpts
                               : (profileIdx == 5) ? &g_ingridOpts
-                              : (profileIdx == 6) ? &g_lilyOpts
-                              : (profileIdx == 7) ? &g_arjinOpts
-                              : (profileIdx == 8) ? &g_pinkOpts
+                              : (profileIdx == 6) ? &g_kimOpts
+                              : (profileIdx == 7) ? &g_lilyOpts
+                              : (profileIdx == 8) ? &g_arjinOpts
+                              : (profileIdx == 9) ? &g_pinkOpts
                               : &Storage::getInstance().getAddonOptions().macroOptions;
             macrosOn = true;
             detectViperMode(inputMacroOptions);
@@ -2292,6 +2410,13 @@ void InputMacro::preprocess()
             return;
         }
         gamepad->state.buttons &= ~V.suppress;   // the dive kick / gear-choice kick stays hidden until released
+    }
+    if (kimActive) {
+        if (kimProcess(gamepad, now, (const uint32_t*)macroPinMasks, isMacroRunning)) {
+            prevMacroInputPressed = true;
+            return;
+        }
+        gamepad->state.buttons &= ~V.suppress;   // the air punch / kick and the gear-choice attack stay hidden until released
     }
     if (akiActive || ingridActive) {
         if (akiProcess(gamepad, now, (const uint32_t*)macroPinMasks, isMacroRunning)) {
@@ -2375,6 +2500,8 @@ void InputMacro::preprocess()
     // CUSTOM: tell the LEDs which button the gear is on (Sagat / pink mode)
     if (chunActive) {
         g_sagatGearMask = chunGear;
+    } else if (kimActive) {
+        g_sagatGearMask = kimGear;
     } else if (pinkActive) {
         g_sagatGearMask = pinkGear;
     } else if (sagatActive) {

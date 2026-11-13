@@ -32,6 +32,7 @@ void SplashScreen::drawScreen() {
                 else if (g_profilePic == 7) pic = PIC_AKI;
                 else if (g_profilePic == 8) pic = PIC_CHUN;
                 else if (g_profilePic == 9) pic = PIC_INGRID;
+                else if (g_profilePic == 10) pic = PIC_KIMBERLY;
             }
             getRenderer()->clearScreen();
             if (pic) getRenderer()->drawSprite((uint8_t*) pic, 128, 64, 16, 0, 0, 1);
