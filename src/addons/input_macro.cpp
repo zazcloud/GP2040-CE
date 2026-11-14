@@ -426,6 +426,7 @@ namespace {
     constexpr uint8_t FL_LOCK      = 8;   // jump lock starts at the start of this step
     constexpr uint8_t FL_BACK      = 16;  // loop opened here can be released with ← (seismo after MK)
     constexpr uint8_t FL_USER_DIR  = 32;  // the stick stays the user's during this step (buttons still ours)
+    constexpr uint8_t FL_OWN_CUT   = 64;  // this step sets its own early arrow release (heCut), not the general rule
 
     struct VStep { uint8_t dir; uint32_t btn; uint32_t dur; uint32_t heCut; uint8_t flags; };
 
@@ -688,10 +689,13 @@ namespace {
         V.bufMask = 0; V.bufFirst = 0; V.bufJump = false;
         V.chordPending = false;
         V.afterBurn = V.nextAfterBurn; V.nextAfterBurn = false;
-        for (int i = 0; i < V.seqLen; i++) V.seq[i].heCut = 0;
+        for (int i = 0; i < V.seqLen; i++) if (!(V.seq[i].flags & FL_OWN_CUT)) V.seq[i].heCut = 0;
         for (int i = V.seqLen - 1; i >= 0; i--) {       // early arrow release on the last arrow + button step
             const VStep& st = V.seq[i];
-            if (st.btn && st.dir != N_ && !(st.flags & FL_USER_DIR)) { V.seq[i].heCut = arrowCut(st.dur); break; }
+            if (st.btn && st.dir != N_ && !(st.flags & FL_USER_DIR)) {
+                if (!(st.flags & FL_OWN_CUT)) V.seq[i].heCut = arrowCut(st.dur);
+                break;
+            }
         }
         if (V.seqLen > 0 && (V.seq[0].flags & FL_JUMP)) setLock(now + V.seq[0].dur + V_JUMP_LOCK_US);
     }
@@ -1766,8 +1770,7 @@ namespace {
     }
     // ---------------- Kimberly (all six macros run here)
     // Macro 1/2 = anti-air gear (Macro 1 -> facing right, Macro 2 -> facing left):
-    //   punch gear (any punch): ↓+HP, ↓, ↘, → + LK (1.3-3f), LP pressed 6-8f after the LK press and held 1.2-3f
-    //   (between LK and LP the stick is the user's)
+    //   punch gear (any punch): ↓+HP 2-4f, ↓, ↘, → + LK 4-5f, → alone 4-6f, then LP 2-4f with → for its first 1-2f
     //   kick gear: qcb + that kick
     // Macro 3 = qcf qcf + LP/HP, Macro 4 = qcb qcb + LP/HP, Macro 5 = qcf qcf + LK/HK, Macro 6 = qcb qcb + LK/HK (fixed on screen)
     // Air: diagonal jump, then a punch within 25f = qcf toward the jump + that punch;
@@ -1806,15 +1809,15 @@ namespace {
                 seqQuarter(-side, kimGear, 12, 22);
             } else {                                // any punch gear
                 vClear();
-                vPush(absDir(true, 0), HP, randomRange(F10(30), F10(50)));
+                vPush(absDir(true, 0), HP, randomRange(F10(20), F10(40)));      // ↓ + HP 2-4f
                 vPush(absDir(true, 0), 0, randomRange(F10(12), F10(22)));
                 vPush(absDir(true, side), 0, randomRange(F10(12), F10(22)));
-                uint32_t lkTotal = randomRange(F10(13), F10(30));   // LK held 1.3-3f
-                uint32_t lpAfter = randomRange(F10(60), F10(80));   // LP pressed 6-8f after the LK press
-                uint32_t lpTotal = randomRange(F10(12), F10(30));   // LP held 1.2-3f
-                vPush(absDir(false, side), LK, lkTotal);
-                vPush(N_, 0, lpAfter - lkTotal, FL_USER_DIR);       // between LK and LP the stick is yours
-                vPush(N_, LP, lpTotal);
+                vPush(absDir(false, side), LK, randomRange(F10(40), F10(50)));  // forward + LK together 4-5f
+                vPush(absDir(false, side), 0, randomRange(F10(40), F10(60)));   // forward alone 4-6f
+                uint32_t lpTotal = randomRange(F10(20), F10(40));               // LP held 2-4f ...
+                uint32_t lpArrow = randomRange(F10(10), F10(20));               // ... forward with it for the first 1-2f
+                vPush(absDir(false, side), LP, lpTotal, FL_OWN_CUT);
+                V.seq[V.seqLen - 1].heCut = lpTotal - lpArrow;                  // then the stick is yours
             }
             e.air = false;
             return play(gp, now, e.prel);
