@@ -19,8 +19,9 @@
 //                                  attack 2-6f, plus HUMAN ERROR
 //     - Viper mode, other macros . arrows 1.2-3f (mostly under 2f), attack 2-6f
 //
-//  3) HUMAN ERROR (supers): 50% of the time the arrow is released 1-3f before
-//     the button, always keeping at least 1.4f of arrow + button together.
+//  3) EARLY ARROW RELEASE (every macro): on the last arrow + button step the arrow is
+//     released 2-3f before the button and the stick goes back to the user, always
+//     keeping at least 1.2f of arrow + button together.
 //
 //  4) VIPER MODE: active when any macro label starts with "V ".
 //     Macro 5 button = flip side, Macro 6 button = burnout on/off.
@@ -72,9 +73,9 @@ namespace {
     constexpr int      VIPER_FAST_PCT   = 70;             // % of arrows under 2f
 
     // Human error
-    constexpr uint32_t HE_MIN_US       = F10(10);
+    constexpr uint32_t HE_MIN_US       = F10(20);
     constexpr uint32_t HE_MAX_US       = F10(30);
-    constexpr uint32_t HE_KEEP_US      = F10(14);
+    constexpr uint32_t HE_KEEP_US      = F10(12);
 
     // Viper
     constexpr uint32_t V_ARROW_MIN     = F10(12);
@@ -154,8 +155,8 @@ namespace {
         {"G DP left",    3, {{262144u, 23332u}, {393216u, 23332u}, {263168u, 49998u}}},
         {"super right ", 6, {{131072u, 39996u}, {655360u, 24165u}, {524288u, 24999u}, {131072u, 23332u}, {655360u, 23330u}, {524416u, 39996u}}},
         {"super left ",  6, {{131072u, 23330u}, {393216u, 24999u}, {262144u, 24999u}, {131072u, 23330u}, {393216u, 39996u}, {262272u, 56662u}}},
-        {"dp right o",   4, {{524288u, 26664u}, {655360u, 23332u}, {525344u, 39996u}, {393216u, 73328u}}},
-        {"dp left oo",   4, {{262144u, 39996u}, {393216u, 23330u}, {263200u, 56662u}, {655360u, 123326u}}},
+        {"dp right o",   3, {{524288u, 26664u}, {655360u, 23332u}, {525344u, 39996u}}},
+        {"dp left oo",   3, {{262144u, 39996u}, {393216u, 23330u}, {263200u, 56662u}}},
     };
     void buildSagatOptions() {
         MacroOptions& o = g_sagatOpts;
@@ -289,14 +290,16 @@ namespace {
         return n > MAX_STEPS ? MAX_STEPS : n;
     }
 
-    uint32_t humanErrorCut(uint32_t dur) {
-        if (!coin()) return 0;
+    // Early arrow release (every macro): on the last arrow + button step the arrow lets go 2-3f before the
+    // button and the stick goes back to the user; the arrow always stays at least 1.2f with the button.
+    uint32_t arrowCut(uint32_t dur) {
         if (dur <= HE_KEEP_US) return 0;
         uint32_t cut = randomRange(HE_MIN_US, HE_MAX_US);
         uint32_t maxCut = dur - HE_KEEP_US;
         return cut > maxCut ? maxCut : cut;
     }
 
+    void prepareStepDurations(const Macro& macro, int n);
     // Randomize the duration of every step for this run of a regular macro
     void prepareSteps(const Macro& macro, uint64_t now) {
         rngState ^= (uint32_t)now;
@@ -304,6 +307,15 @@ namespace {
 
         int n = stepCount(macro);
         for (int i = 0; i < n; i++) stepHeCut[i] = 0;
+        prepareStepDurations(macro, n);
+        int last = -1;                          // early arrow release on the last arrow + button step
+        for (int i = 0; i < n; i++) {
+            uint32_t m = macro.macroInputs[i].buttonMask;
+            if ((m & ATTACK_MASK) && (m & DIR_MASK)) last = i;
+        }
+        if (last >= 0) stepHeCut[last] = arrowCut(stepDuration[last]);
+    }
+    void prepareStepDurations(const Macro& macro, int n) {
 
         // ---------------- supers: fast arrows + human error
         if (isSuperMacro(macro)) {
@@ -323,14 +335,11 @@ namespace {
                     ? randomRange(FAST_MIN_US, FAST_MID_US)
                     : randomRange(FAST_MIN_US, FAST_MAX_US);
             }
-            int lastAttack = -1;
             for (int i = 0; i < n; i++) {
                 uint32_t m = macro.macroInputs[i].buttonMask;
-                if (m & ATTACK_MASK) { stepDuration[i] = randomRange(BTN_MIN_US, BTN_MAX_US); lastAttack = i; }
+                if (m & ATTACK_MASK) stepDuration[i] = randomRange(BTN_MIN_US, BTN_MAX_US);
                 else if (!(m & DIR_MASK)) stepDuration[i] = macro.macroInputs[i].duration;
             }
-            if (lastAttack >= 0 && (macro.macroInputs[lastAttack].buttonMask & DIR_MASK))
-                stepHeCut[lastAttack] = humanErrorCut(stepDuration[lastAttack]);
             return;
         }
 
@@ -665,7 +674,6 @@ namespace {
         }
         uint32_t dur = vBtn();
         vPush(lastDir, btn, dur);
-        V.seq[V.seqLen - 1].heCut = humanErrorCut(dur);
     }
     void seqLevel1() { superArrowsAndFinish({D_, DF, F_, D_, DF}, F_, coin() ? LK : HK); }
     void seqLevel2() { superArrowsAndFinish({D_, DB, B_, D_, DB}, B_, coin() ? LP : HP); }
@@ -680,6 +688,11 @@ namespace {
         V.bufMask = 0; V.bufFirst = 0; V.bufJump = false;
         V.chordPending = false;
         V.afterBurn = V.nextAfterBurn; V.nextAfterBurn = false;
+        for (int i = 0; i < V.seqLen; i++) V.seq[i].heCut = 0;
+        for (int i = V.seqLen - 1; i >= 0; i--) {       // early arrow release on the last arrow + button step
+            const VStep& st = V.seq[i];
+            if (st.btn && st.dir != N_ && !(st.flags & FL_USER_DIR)) { V.seq[i].heCut = arrowCut(st.dur); break; }
+        }
         if (V.seqLen > 0 && (V.seq[0].flags & FL_JUMP)) setLock(now + V.seq[0].dur + V_JUMP_LOCK_US);
     }
 
@@ -795,7 +808,8 @@ namespace {
         if (!V.playing) return false;
         VStep& st = V.seq[V.seqPos];
         uint64_t el = now - V.stepStart;
-        if (!(st.flags & FL_USER_DIR)) gp->state.dpad = (el + st.heCut < st.dur) ? toAbs(st.dir) : 0;
+        // the stick stays the user's on a FL_USER_DIR step and once the arrow has let go early
+        if (!(st.flags & FL_USER_DIR) && el + st.heCut < st.dur) gp->state.dpad = toAbs(st.dir);
         gp->state.buttons = st.btn;
         return true;
     }
@@ -1093,6 +1107,7 @@ namespace {
             vPush(spamTailDown ? dn : N_, spamBtn, randomRange(F10(10), F10(20)));
         }
     }
+    void spamNoCut() { for (int i = 0; i < V.seqLen; i++) V.seq[i].heCut = 0; }   // the spam loop keeps its arrows
     bool spamProcess(Gamepad* gp, uint64_t now, bool macroBusy) {
         if (!spamArmed && !spamOn) return false;
         bool held = spamIsX ? (gp->state.buttons & XBTN) != 0 : (gp->debouncedGpio & spamPin) != 0;
@@ -1104,11 +1119,11 @@ namespace {
         if (spamArmed && !spamOn) {
             if (V.playing || macroBusy) return false;   // the super is still coming out
             spamArmed = false; spamOn = true; spamTailDown = false;
-            seqSpamRep(); startSeq(now, 0, 0);
+            seqSpamRep(); startSeq(now, 0, 0); spamNoCut();
         }
         uint8_t prel = toRel(gp->state.dpad);
         if (runSeq(gp, now, prel)) return true;
-        seqSpamRep(); startSeq(now, 0, 0);     // next round
+        seqSpamRep(); startSeq(now, 0, 0); spamNoCut();     // next round
         return runSeq(gp, now, prel);
     }
     // ---------------- Sagat mode extras: burnout (turbo button) and X = Level 1
@@ -1120,7 +1135,6 @@ namespace {
         for (uint8_t d : {D_, dg, hz, D_, dg}) vPush(d, 0, randomRange(F10(12), F10(21)));
         uint32_t dur = vBtn();
         vPush(hz, kick ? (coin() ? LK : HK) : (coin() ? LP : HP), dur);
-        V.seq[V.seqLen - 1].heCut = humanErrorCut(dur);
     }
 
     // ---------------- shared pieces of the per-profile engines
@@ -1582,6 +1596,16 @@ namespace {
     uint64_t p27At = 0, p27End = 0;
     bool p27Prev = false, p27Armed = false, p27Firing = false;
     uint32_t p27HKHide = 0, prevP27Phys = 0;
+    uint8_t dpadMaskForAction(GpioAction a) {
+        switch (a) {
+            case GpioAction::BUTTON_PRESS_UP:    return GAMEPAD_MASK_UP;
+            case GpioAction::BUTTON_PRESS_DOWN:  return GAMEPAD_MASK_DOWN;
+            case GpioAction::BUTTON_PRESS_LEFT:  return GAMEPAD_MASK_LEFT;
+            case GpioAction::BUTTON_PRESS_RIGHT: return GAMEPAD_MASK_RIGHT;
+            default: return 0;
+        }
+    }
+    uint64_t p27ArrowEnd = 0;
     uint32_t buttonMaskForAction(GpioAction a) {
         switch (a) {
             case GpioAction::BUTTON_PRESS_B1: return GAMEPAD_MASK_B1;
@@ -1615,7 +1639,7 @@ namespace {
                 if (rise & HK) { p27Armed = true; p27HKHide |= HK; }
             } else if (p27Armed) {                  // frame 14
                 p27Firing = true;
-                p27End = now + randomRange(F10(20), F10(50));
+                { uint32_t d = randomRange(F10(20), F10(50)); p27End = now + d; p27ArrowEnd = p27End - arrowCut(d); }
             } else {
                 p27At = 0;                          // nothing in 13f: full control
             }
@@ -1624,7 +1648,8 @@ namespace {
         if (p27Firing) {
             if (now < p27End) {
                 uint32_t pinBtn = buttonMaskForAction(Storage::getInstance().getProfilePinMappings()[27].action);
-                gp->state.dpad = GAMEPAD_MASK_DOWN;
+                if (now < p27ArrowEnd) gp->state.dpad = GAMEPAD_MASK_DOWN;
+                else gp->state.dpad &= ~dpadMaskForAction(Storage::getInstance().getProfilePinMappings()[27].action);
                 gp->state.buttons = (gp->state.buttons & ~(ATTACK_MASK | pinBtn)) | (arjinActive ? MP : HK);
                 return true;
             }
@@ -2047,6 +2072,7 @@ void InputMacro::runCurrentMacro() {
 
     Gamepad * gamepad = Storage::getInstance().GetGamepad();
     currentMicros = getMicro();
+    uint8_t userDpad = gamepad->state.dpad;      // CUSTOM: your own stick, for the early arrow release
 
     if (!macro.interruptible && macro.exclusive) {
         // Prevent any other inputs from modifying our input (Exclusive)
@@ -2108,8 +2134,9 @@ void InputMacro::runCurrentMacro() {
     // Check if we should still hold this macro input based on duration
     uint64_t elapsed = currentMicros - macroStartTime;
     if (elapsed <= stepDuration[pos]) {
-        // CUSTOM: human error - arrow released a little before the button
+        // CUSTOM: early arrow release - the arrow lets go before the button and the stick is yours again
         bool dirsOn = elapsed + stepHeCut[pos] < stepDuration[pos] || stepHeCut[pos] == 0;
+        if (!dirsOn) gamepad->state.dpad = userDpad;
         if (dirsOn) {
             if (buttonMask & GAMEPAD_MASK_DU) {
                 gamepad->state.dpad |= GAMEPAD_MASK_UP;
