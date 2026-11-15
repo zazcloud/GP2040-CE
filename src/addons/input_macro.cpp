@@ -1772,7 +1772,8 @@ namespace {
     }
     // ---------------- Kimberly (all six macros run here)
     // Macro 1/2 = anti-air gear (Macro 1 -> facing right, Macro 2 -> facing left):
-    //   punch gear (any punch): ↓+HP 2-4f, ↓, ↘, → + LK 4-5f, → alone 4-6f, then → + LP 1-2f, then LP 6-8f more (stick yours)
+    //   punch gear (any punch): ↓+HP 2-4f, ↓, ↘, → + LK 4-5f, → alone 4-6f, then → + LP 3-4f, then LP 8-10f more (stick yours);
+    //   from the LK on, any attack you press cancels the rest and goes out as your own
     //   kick gear: qcb + that kick
     // Macro 3 = qcf qcf + LP/HP, Macro 4 = qcb qcb + LP/HP, Macro 5 = qcf qcf + LK/HK, Macro 6 = qcb qcb + LK/HK (fixed on screen)
     // Air: diagonal jump, then a punch within 25f = qcf toward the jump + that punch;
@@ -1780,10 +1781,18 @@ namespace {
     Eng eKim;
     uint32_t kimGear = HP;
     bool     kimAirPunch = false;                   // the air special playing is the punch one
+    bool     kimPunchGear = false;                  // the punch gear is playing (an attack press after its qcf cancels the rest)
+    constexpr int KIM_GEAR_LK_STEP = 3;             // ↓+HP, ↓, ↘, then → + LK
     bool kimProcess(Gamepad* gp, uint64_t now, const uint32_t* m, bool macroBusy) {
         Eng& e = eKim;
         e.read(gp, m[0] | m[1] | m[2] | m[3] | m[4] | m[5], now, ENG_STICK | ENG_JUMP);
         uint32_t rise = e.rise, phys = e.phys;
+        if (!V.playing) kimPunchGear = false;
+        if (kimPunchGear && V.seqPos >= KIM_GEAR_LK_STEP && (e.physRise & ATTACK_MASK)) {
+            V.playing = false;                      // your own attack after the qcf + LK: drop the rest, the button goes out
+            kimPunchGear = false;
+            return false;
+        }
         if (V.playing) {
             e.airOD(e.physRise & (kimAirPunch ? PUNCH_MASK : KICK_MASK), now);
             if (e.run(gp, now)) return true;
@@ -1816,10 +1825,14 @@ namespace {
                 vPush(absDir(true, side), 0, randomRange(F10(12), F10(22)));
                 vPush(absDir(false, side), LK, randomRange(F10(40), F10(50)));  // forward + LK together 4-5f
                 vPush(absDir(false, side), 0, randomRange(F10(40), F10(60)));   // forward alone 4-6f
-                uint32_t lpArrow = randomRange(F10(10), F10(20));               // forward + LP 1-2f ...
-                uint32_t lpOwn   = randomRange(F10(60), F10(80));               // ... then LP 6-8f more, the stick is yours
+                uint32_t lpArrow = randomRange(F10(30), F10(40));               // forward + LP 3-4f ...
+                uint32_t lpOwn   = randomRange(F10(80), F10(100));              // ... then LP 8-10f more, the stick is yours
                 vPush(absDir(false, side), LP, lpArrow + lpOwn, FL_OWN_CUT);
                 V.seq[V.seqLen - 1].heCut = lpOwn;
+                e.air = false;
+                bool on = play(gp, now, e.prel);
+                kimPunchGear = true;
+                return on;
             }
             e.air = false;
             return play(gp, now, e.prel);
