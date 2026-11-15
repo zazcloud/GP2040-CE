@@ -21,7 +21,7 @@
 //
 //  3) EARLY ARROW RELEASE (every macro): on the last arrow + button step the arrow is
 //     released 2-3f before the button and the stick goes back to the user, always
-//     keeping at least 1.2f of arrow + button together.
+//     keeping at least 1.2f of arrow + button together. 25% of the time it is skipped.
 //
 //  4) VIPER MODE: active when any macro label starts with "V ".
 //     Macro 5 button = flip side, Macro 6 button = burnout on/off.
@@ -292,7 +292,9 @@ namespace {
 
     // Early arrow release (every macro): on the last arrow + button step the arrow lets go 2-3f before the
     // button and the stick goes back to the user; the arrow always stays at least 1.2f with the button.
+    // One time in four it does not happen: the arrow stays with the button to the end.
     uint32_t arrowCut(uint32_t dur) {
+        if (nextRandom() % 4 == 0) return 0;
         if (dur <= HE_KEEP_US) return 0;
         uint32_t cut = randomRange(HE_MIN_US, HE_MAX_US);
         uint32_t maxCut = dur - HE_KEEP_US;
@@ -1770,7 +1772,7 @@ namespace {
     }
     // ---------------- Kimberly (all six macros run here)
     // Macro 1/2 = anti-air gear (Macro 1 -> facing right, Macro 2 -> facing left):
-    //   punch gear (any punch): ↓+HP 2-4f, ↓, ↘, → + LK 4-5f, → alone 4-6f, then LP 2-4f with → for its first 1-2f
+    //   punch gear (any punch): ↓+HP 2-4f, ↓, ↘, → + LK 4-5f, → alone 4-6f, then → + LP 1-2f, then LP 6-8f more (stick yours)
     //   kick gear: qcb + that kick
     // Macro 3 = qcf qcf + LP/HP, Macro 4 = qcb qcb + LP/HP, Macro 5 = qcf qcf + LK/HK, Macro 6 = qcb qcb + LK/HK (fixed on screen)
     // Air: diagonal jump, then a punch within 25f = qcf toward the jump + that punch;
@@ -1814,10 +1816,10 @@ namespace {
                 vPush(absDir(true, side), 0, randomRange(F10(12), F10(22)));
                 vPush(absDir(false, side), LK, randomRange(F10(40), F10(50)));  // forward + LK together 4-5f
                 vPush(absDir(false, side), 0, randomRange(F10(40), F10(60)));   // forward alone 4-6f
-                uint32_t lpTotal = randomRange(F10(20), F10(40));               // LP held 2-4f ...
-                uint32_t lpArrow = randomRange(F10(10), F10(20));               // ... forward with it for the first 1-2f
-                vPush(absDir(false, side), LP, lpTotal, FL_OWN_CUT);
-                V.seq[V.seqLen - 1].heCut = lpTotal - lpArrow;                  // then the stick is yours
+                uint32_t lpArrow = randomRange(F10(10), F10(20));               // forward + LP 1-2f ...
+                uint32_t lpOwn   = randomRange(F10(60), F10(80));               // ... then LP 6-8f more, the stick is yours
+                vPush(absDir(false, side), LP, lpArrow + lpOwn, FL_OWN_CUT);
+                V.seq[V.seqLen - 1].heCut = lpOwn;
             }
             e.air = false;
             return play(gp, now, e.prel);
