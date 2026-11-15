@@ -1772,7 +1772,7 @@ namespace {
     }
     // ---------------- Kimberly (all six macros run here)
     // Macro 1/2 = anti-air gear (Macro 1 -> facing right, Macro 2 -> facing left):
-    //   punch gear (any punch): ↓+HP 2-4f, ↓, ↘, → + LK 4-5f, → alone 4-6f, then → + LP 3-4f, then LP 8-10f more (stick yours);
+    //   punch gear (any punch): ↓+HP 2-4f, ↓ and ↘ 2.5-4f each, → + LK 4-5f, → alone 4-6f, then → + LP 3-4f, then LP 8-10f more (stick yours);
     //   from the LK on, any attack you press cancels the rest and goes out as your own
     //   kick gear: qcb + that kick
     // Macro 3 = qcf qcf + LP/HP, Macro 4 = qcb qcb + LP/HP, Macro 5 = qcf qcf + LK/HK, Macro 6 = qcb qcb + LK/HK (fixed on screen)
@@ -1821,8 +1821,8 @@ namespace {
             } else {                                // any punch gear
                 vClear();
                 vPush(absDir(true, 0), HP, randomRange(F10(20), F10(40)));      // ↓ + HP 2-4f
-                vPush(absDir(true, 0), 0, randomRange(F10(12), F10(22)));
-                vPush(absDir(true, side), 0, randomRange(F10(12), F10(22)));
+                vPush(absDir(true, 0), 0, randomRange(F10(25), F10(40)));       // ↓ 2.5-4f
+                vPush(absDir(true, side), 0, randomRange(F10(25), F10(40)));    // down-forward 2.5-4f
                 vPush(absDir(false, side), LK, randomRange(F10(40), F10(50)));  // forward + LK together 4-5f
                 vPush(absDir(false, side), 0, randomRange(F10(40), F10(60)));   // forward alone 4-6f
                 uint32_t lpArrow = randomRange(F10(30), F10(40));               // forward + LP 3-4f ...
