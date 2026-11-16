@@ -1336,7 +1336,8 @@ namespace {
         prevAbs = dpad;
         V.suppress &= phys;                     // released buttons are no longer hidden
         uint8_t prel = toRel(dpad);
-        if (manon && (physRise & PUNCH_MASK) && sawQuarterCircle(now)) lvl3Until = now + 30ULL * FRAME_US;
+        // Manon: your own qcf / qcb + a punch or a kick opens the 30f Level 3 window (Macro 3 / 4 = qcf qcf / qcb qcb + LP / HP)
+        if (manon && (physRise & (PUNCH_MASK | KICK_MASK)) && sawQuarterCircle(now)) lvl3Until = now + 30ULL * FRAME_US;
         // Manon: your HP standing or walking (no ↑ / ↓), not during a macro
         if (manon && (physRise & HP) && !V.playing && !(dpad & (GAMEPAD_MASK_UP | GAMEPAD_MASK_DOWN))) manonHPAt = now;
         if (arjinActive) {                      // Arjin: your ↓ ↓ + HK keeps HK held until ↓ or a punch
