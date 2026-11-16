@@ -27,6 +27,8 @@ extern volatile bool g_ledRainbow;               // Kimberly: fixed rainbow, a l
 extern volatile uint32_t g_ledGear;              // gear buttons' colour by the gear on them (0 = profile colour)
 extern volatile int g_ledFreePin;                // GPIO pin of the free button (of Macro 5 / 6), -1 = none
 extern volatile uint32_t g_ledFreeColor;         // ... and its colour by the stored move
+extern volatile int g_ledAfbPin;                 // GPIO pin of the anti-fireball button (21), -1 = none
+extern volatile uint32_t g_ledAfbColor;          // ... and its colour by the stored strength
 extern volatile uint32_t g_sagatGearMask;
 
 // CUSTOM: the LED under each physical button follows the board's original wiring
@@ -692,6 +694,9 @@ void NeoPicoLEDAddon::process() {
         int fpin = g_ledFreePin;                       // the free button (of Macro 5 / 6): colour of its stored move
         if (fpin >= 0 && fpin < 30 && pinLed[fpin] >= 0)
             frame[pinLed[fpin]] = RGB((uint32_t)g_ledFreeColor).value(fmt, bx);
+        int apin = g_ledAfbPin;                        // the anti-fireball button: colour of its stored strength
+        if (apin >= 0 && apin < 30 && pinLed[apin] >= 0)
+            frame[pinLed[apin]] = RGB((uint32_t)g_ledAfbColor).value(fmt, bx);
     }
 
     // Apply the player LEDs to our first 4 leds if we're in NEOPIXEL mode

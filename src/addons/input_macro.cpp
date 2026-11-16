@@ -42,6 +42,8 @@ volatile bool g_ledRainbow       = false;    // Kimberly: fixed rainbow (a littl
 volatile uint32_t g_ledGear      = 0;        // colour of the gear buttons (Macro 1 / 2) by the gear on them; 0 = profile colour
 volatile int  g_ledFreePin       = -1;       // GPIO pin of the free button (of Macro 5 / 6), -1 = none
 volatile uint32_t g_ledFreeColor = 0;        // ... and its colour by the move stored on it
+volatile int  g_ledAfbPin        = -1;       // GPIO pin of the anti-fireball button (21), -1 = none in this profile
+volatile uint32_t g_ledAfbColor  = 0;        // ... and its colour by the strength stored on it
 volatile uint32_t g_sagatGearMask = 0;      // attack button of the current gear (red LED)
 
 namespace {
@@ -1168,11 +1170,33 @@ namespace {
         superArrowsAndFinish({absDir(true, 0), absDir(true, h), absDir(false, h), absDir(true, 0), absDir(true, h)},
                              absDir(false, h), btn);
     }
-    // Free button (Cammy, Jamie, Chun-Li): of Macro 5 / Macro 6, the one that points away from the side you
+    // Free button (Jamie, Chun-Li): of Macro 5 / Macro 6, the one that points away from the side you
     // face is useless as it is, so it does a side-following special instead. Facing right -> Macro 6 is free,
     // facing left -> Macro 5. Its move is chosen like a gear: hold an attack + press it (stays until changed).
     uint32_t freeOwnedPins = 0;                      // free-button presses the engine took: no plain macro until released
     uint32_t freePin(uint32_t m5, uint32_t m6) { return V.facingRight ? m6 : m5; }
+    // Anti-fireball button = GPIO pin 21 (Manon, Cammy, Jamie), hidden from the game in those profiles.
+    //   Manon: qcf + punch. Cammy: qcb + punch. Jamie: qcf + kick. All follow the side.
+    //   Strength is chosen like a gear: hold an attack + press it: light = OD, medium = medium, heavy = heavy.
+    constexpr uint32_t AFB_PIN_MASK = 1u << 21;
+    int  afbSel = 1;                                 // 0 = OD, 1 = medium (default), 2 = heavy
+    bool afbPrev = false, afbRise = false;           // afbRise: pin 21 was pressed this poll (set in preprocess)
+    bool afbOn() { return pinkActive || cammyActive; }   // Manon, Cammy, Jamie
+    // true = a sequence was built and must be played; false = nothing to play (no press, or a strength choice)
+    bool afbFire(uint32_t phys) {
+        if (!afbRise) return false;
+        afbRise = false;
+        uint32_t held = phys & ATTACK_MASK;
+        if (held) {                                  // attack held + the button = choose the strength
+            if (popcount32(held) == 1) afbSel = (held & (LP | LK)) ? 0 : (held & (MP | MK)) ? 1 : 2;
+            V.suppress |= held;
+            return false;
+        }
+        uint32_t btn = jamieActive ? (afbSel == 0 ? (MK | HK) : afbSel == 1 ? MK : HK)
+                                   : (afbSel == 0 ? (MP | HP) : afbSel == 1 ? MP : HP);
+        seqQuarter(sideH(pinkActive || jamieActive), btn, 12, 18);   // Manon / Jamie: qcf (forward); Cammy: qcb (back)
+        return true;
+    }
     // Per-engine input edges, plus the "diagonal jump, then a button = special in the air" rule.
     constexpr int ENG_STICK = 1, ENG_JUMP = 2;
     struct Eng {
@@ -1395,6 +1419,10 @@ namespace {
             cgrab = false;
             return play(gp, now, prel);
         }
+        if (manon && !macroBusy && afbFire(phys)) {   // pin 21: anti-fireball (qcf + punch)
+            cgrab = false;
+            return play(gp, now, prel);
+        }
         if (!rise || macroBusy) return false;
         if (manon && (rise & (m1 | m2))) {
             uint32_t held = phys & ATTACK_MASK;
@@ -1509,7 +1537,7 @@ namespace {
     // ---------------- Cammy: diagonal jump, then a kick within 25f of the jump = qcb + that kick
     // (another kick within 2f of the first = OD, both kicks); Macro 3 = qcf qcf + P, Macro 4 = qcb qcb + P
     Eng eCammy;
-    uint32_t cammyFree = LP;                        // attack chosen for the free button (Cammy default LP, Jamie LK)
+    uint32_t cammyFree = LP;                        // Jamie: punch chosen for the free button (LP / MP = command grab, HP = OD)
     // All profiles: after your qcf / qcb, a down-diagonal slip (↘ after →, ↙ after ←) that starts within 2f
     // of reaching the forward is sent as the forward; held longer than 2f, the diagonal goes through.
     int cqfStage = 0; uint8_t cqfH = 0, cqfPrev = 0xFF, cqfFwdH = 0;
@@ -1537,13 +1565,12 @@ namespace {
             if (ad != cqfFwdH) cqfFwdAt = 0;
         }
     }
-    // Free button: Cammy: LP = qcb + MP, MP = qcb + HP, HP = qcb + MP+HP (OD).
-    //   Jamie: LP / MP = command grab (+ LK), HP = OD command grab (LK+MK), LK / MK = qcf + MK, HK = qcf + MK+HK (OD).
+    // Free button (Jamie only): LP / MP = command grab (+ LK), HP = OD command grab (LK+MK). Cammy: plain OD DP on both.
     bool cammyProcess(Gamepad* gp, uint64_t now, uint32_t m3, uint32_t m4, uint32_t m5, uint32_t m6, bool macroBusy) {
         Eng& e = eCammy;
         e.read(gp, m3 | m4 | m5 | m6, now, ENG_STICK | ENG_JUMP);
         uint32_t phys = e.phys, physRise = e.physRise;
-        uint32_t freeRise = e.rise & freePin(m5, m6);
+        uint32_t freeRise = jamieActive ? (e.rise & freePin(m5, m6)) : 0;
         freeOwnedPins = (freeOwnedPins | freeRise) & (uint32_t)gp->debouncedGpio;
         if (V.playing) {
             e.airOD(physRise & KICK_MASK, now);
@@ -1552,19 +1579,18 @@ namespace {
         if (macroBusy) return false;
         // diagonal jump, then a kick within 25f: qcb away from the jump (↗ -> ↓ ↙ ←, ↖ -> ↓ ↘ →) + that kick
         if ((physRise & KICK_MASK) && e.jumped(now, 25)) return e.startAir(gp, now, physRise & KICK_MASK, -e.jumpDir);
-        if (freeRise) {
+        if (afbFire(phys)) {                        // pin 21: anti-fireball (Cammy qcb + punch, Jamie qcf + kick)
+            e.air = false;
+            return play(gp, now, e.prel);
+        }
+        if (freeRise) {                             // Jamie: command grab on the free button
             uint32_t held = phys & ATTACK_MASK;
-            if (held) {                             // attack held + free button = choose its move (Cammy: punches only)
-                if (popcount32(held) == 1 && (jamieActive || (held & PUNCH_MASK))) cammyFree = held;
+            if (held) {                             // punch held + free button = choose it (HP = OD)
+                if (popcount32(held) == 1 && (held & PUNCH_MASK)) cammyFree = held;
                 V.suppress |= held;
                 return false;
             }
-            if (!jamieActive)                       // Cammy: qcb + punch
-                seqQuarter(sideH(false), cammyFree == LP ? MP : cammyFree == MP ? HP : (MP | HP), 12, 18);
-            else if (cammyFree & PUNCH_MASK)        // Jamie: command grab
-                seqCommandGrab(cammyFree == HP ? (LK | MK) : LK, (e.prel & RF) && !(e.prel & RD));
-            else                                    // Jamie: qcf + kick
-                seqQuarter(sideH(true), cammyFree == HK ? (MK | HK) : MK, 12, 18);
+            seqCommandGrab(cammyFree == HP ? (LK | MK) : LK, (e.prel & RF) && !(e.prel & RD));
             e.air = false;
             return play(gp, now, e.prel);
         }
@@ -2233,7 +2259,7 @@ void InputMacro::preprocess()
             eKim.air = false; eKim.jumpAt = 0; kimGear = HP;
             eChun.air = false; eChun.jumpAt = 0; chunGear = MK; chunHPAt = 0; chunHPFireAt = 0; chunMPAt = 0; chunHKAt = 0;
             akiHKAt = 0;
-            eCammy.air = false; eCammy.jumpAt = 0; cammyFree = jamieActive ? LK : LP; chunFree = LK; freeOwnedPins = 0;
+            eCammy.air = false; eCammy.jumpAt = 0; cammyFree = LP; chunFree = LK; freeOwnedPins = 0; afbSel = 1; afbPrev = false; afbRise = false;
             lilySpd = false; lilyOD = false;
             lukeHoldBtn = 0; lukeSuppress = 0; lukeTaken = false;
             g_sagatBurnout = false;
@@ -2288,6 +2314,18 @@ void InputMacro::preprocess()
             V.facingRight = (dg > 0);
             g_viperFacingRight = V.facingRight;
         }
+    }
+    // CUSTOM: anti-fireball button (pin 21) in Manon / Cammy / Jamie: read its press, hide what it is mapped to
+    afbRise = false;
+    if (afbOn()) {
+        bool p = (gamepad->debouncedGpio & AFB_PIN_MASK) != 0;
+        afbRise = p && !afbPrev;
+        afbPrev = p;
+        GpioAction a = Storage::getInstance().getProfilePinMappings()[21].action;
+        gamepad->state.buttons &= ~buttonMaskForAction(a);
+        gamepad->state.dpad &= ~dpadMaskForAction(a);
+    } else {
+        afbPrev = false;
     }
     if (!V.playing && !isMacroRunning) cammyCleanQcf(gamepad, now);
 
@@ -2440,7 +2478,7 @@ void InputMacro::preprocess()
         g_ledGear = !gear ? 0 : (gear & PUNCH_MASK) ? C_PUNCH : C_KICK;
         int pin = -1;
         uint32_t color = 0;
-        if (cammyActive || chunActive) {
+        if (jamieActive || chunActive) {
             uint32_t pm = freePin(macroPinMasks[4], macroPinMasks[5]);
             if (pm) pin = __builtin_ctz(pm);
             uint32_t sel = chunActive ? chunFree : cammyFree;
@@ -2448,6 +2486,12 @@ void InputMacro::preprocess()
         }
         g_ledFreeColor = color;
         g_ledFreePin = pin;
+        // anti-fireball button: medium orange / green, heavy yellow / blue, OD red / purple (punch / kick)
+        const uint32_t C_HEAVY_PUNCH = 0xFFDC00, C_HEAVY_KICK = 0x0000FF;
+        bool kick = jamieActive;
+        g_ledAfbColor = afbSel == 0 ? (kick ? C_OD_KICK : C_OD_PUNCH) : afbSel == 1 ? (kick ? C_KICK : C_PUNCH)
+                                    : (kick ? C_HEAVY_KICK : C_HEAVY_PUNCH);
+        g_ledAfbPin = afbOn() ? 21 : -1;
     }
 
     checkMacroAction();
