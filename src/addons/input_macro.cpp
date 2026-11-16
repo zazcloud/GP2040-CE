@@ -1263,6 +1263,7 @@ namespace {
     uint8_t  ahDir[16]; uint64_t ahT[16]; int ahHead = 0, ahCount = 0;
     uint8_t  prevAbs = 0xFF;
     uint64_t lvl3Until = 0;
+    uint64_t manonHPAt = 0;                 // Manon: your last standing HP (X within 30f = Level 1)
     bool arjinHKHold = false;
     uint64_t arjinBlockUntil = 0, arjinPendUntil = 0, arjinHKStart = 0;
     bool arjinDownSwallow = false, arjinDownPass = false;
@@ -1336,6 +1337,8 @@ namespace {
         V.suppress &= phys;                     // released buttons are no longer hidden
         uint8_t prel = toRel(dpad);
         if (manon && (physRise & PUNCH_MASK) && sawQuarterCircle(now)) lvl3Until = now + 30ULL * FRAME_US;
+        // Manon: your HP standing or walking (no ↑ / ↓), not during a macro
+        if (manon && (physRise & HP) && !V.playing && !(dpad & (GAMEPAD_MASK_UP | GAMEPAD_MASK_DOWN))) manonHPAt = now;
         if (arjinActive) {                      // Arjin: your ↓ ↓ + HK keeps HK held until ↓ or a punch
             // ↓ before frame 18 from the HK: ignored (not sent, does not stop the hold) until you let go of it
             if (arjinHKHold) {
@@ -1383,6 +1386,14 @@ namespace {
             if (runSeq(gp, now, prel)) return true;
             cgrab = false;
         }
+        // Manon: standing HP, then X within 30f = Level 1 (qcf qcf + LK / HK, follows the side), as in burnout
+        if (manon && !macroBusy && (physRise & XBTN) && !g_sagatBurnout && manonHPAt && now - manonHPAt <= 30ULL * FRAME_US) {
+            manonHPAt = 0;
+            V.suppress |= XBTN;                 // X stays hidden until you let go of it
+            seqSagatLevel1(true);
+            cgrab = false;
+            return play(gp, now, prel);
+        }
         if (!rise || macroBusy) return false;
         if (manon && (rise & (m1 | m2))) {
             uint32_t held = phys & ATTACK_MASK;
@@ -1406,7 +1417,8 @@ namespace {
             return false;                       // Manon without the window: normal super macro
         }
         if (rise & (m5 | m6)) {
-            seqCommandGrab((rise & m5) ? LP : HP, (prel & RF) && !(prel & RD));
+            // Arjin: Macro 5 = LP, Macro 6 = HP. Manon: the other way round (Macro 5 = HP, Macro 6 = LP).
+            seqCommandGrab((((rise & m5) != 0) != manon) ? LP : HP, (prel & RF) && !(prel & RD));
             cgrab = true; cgrabOD = (phys & HP) != 0;
             if (cgrabOD) { V.suppress |= HP; V.seq[V.seqLen - 1].btn = LP | HP; }
             return play(gp, now, prel);
@@ -2224,7 +2236,7 @@ void InputMacro::preprocess()
             lilySpd = false; lilyOD = false;
             lukeHoldBtn = 0; lukeSuppress = 0; lukeTaken = false;
             g_sagatBurnout = false;
-            lvl3Until = 0; arjinHKHold = false; arjinBlockUntil = 0; arjinPendUntil = 0; arjinPending = 0; arjinDownSwallow = false;
+            lvl3Until = 0; manonHPAt = 0; arjinHKHold = false; arjinBlockUntil = 0; arjinPendUntil = 0; arjinPending = 0; arjinDownSwallow = false;
             cgrab = false; pinkHKHold = false; pinkHoldAfter = false;
             for (int i = 0; i < MAX_MACRO_LIMIT; i++) gearMask[i] = 0;
             if (cammyActive) { gearMask[0] = LK; gearMask[1] = LK; }   // Cammy DP gear starts on LK
