@@ -591,13 +591,13 @@ namespace {
         vPush(U_, btn, F10(30), seismo ? FL_SEISMO : 0);
     }
     void seqSeismo(uint32_t punches) { seqCancel(punches, true); }
-    // Burning kick (fixed, from the player's input history): ↓ 4f, ↘ 3f, → 2f, ↗ 3f, → + kick 1f, N + kick 4f
+    // Burning kick (fixed): ↓ 5f, ↘ 4f, → 2f, ↗ 4f, → + kick 1f, N + kick 4f
     void seqBurnKick(uint32_t kick) {
         vClear();
-        vPush(D_, 0, F10(40));
-        vPush(DF, 0, F10(30));
+        vPush(D_, 0, F10(50));
+        vPush(DF, 0, F10(40));
         vPush(F_, 0, F10(20));
-        vPush(UF, 0, F10(30));
+        vPush(UF, 0, F10(40));
         vPush(F_, kick, F10(10));
         vPush(N_, kick, F10(40));
         V.burnSeq = true;
@@ -704,7 +704,7 @@ namespace {
     //  MK (standing or crouching): your own hit; 10f window: MP = seismo, LP = the st.HP feint, HP = OD seismo (LP+MP),
     //    a kick = burning kick of that kick on the seismo motion
     //  any seismo (yours or a macro's): 20f window: LP = seismo feint, MP / HP = seismo, LK / MK / HK = burning kick
-    //  a window's cancel starts when the window ends, even if you pressed earlier (the seismo window's burning kick: always 21f after the punch)
+    //  a window's cancel starts when the window ends, even if you pressed earlier (the seismo window's burning kick: always 19f after the punch)
     //  Macro 5 / 6 = Level 1 (fixed on screen); burnout (turbo button): X = Level 1
     //  jump protection: 43f after you press up, the first HP / MK press starts nothing (once per jump)
     //  after a burning kick: 70f where only Macro 1-6 work (no cancels, no windows, X is a plain X)
@@ -752,15 +752,15 @@ namespace {
 
         // ---- open window: remember the first button, start its cancel when the window ends
         if (V.win != W_NONE) {
-            // seismo window: punches count until 20f, a kick until 21f
-            uint32_t accept = (V.win == W_SZ && now >= V.winAt + V_WIN_SZ_US) ? KICK_MASK : ATTACK_MASK;
+            // seismo window: punches count until 20f, a kick until 19f
+            uint32_t accept = (V.win == W_SZ && now >= V.winAt + V_WIN_SZ_US - FRAME_US) ? PUNCH_MASK : ATTACK_MASK;
             uint32_t want = rising & accept;
             if (want && !V.winPick) V.winPick = pickOne(want);
             V.suppress |= want;                   // window presses never reach the game
-            // MK window: its end. Seismo window: a punch cancel starts at 20f, the burning kick always at 21f
-            // (frame 22 counting the punch press as frame 1); with nothing pressed it closes at 21f
+            // MK window: its end. Seismo window: a punch cancel starts at 20f, the burning kick always at 19f
+            // (frame 20 counting the punch press as frame 1, kick on frame 35); with nothing pressed it closes at 20f
             uint64_t endUs = V.win == W_MK ? V.winLen
-                           : (V.winPick && !(V.winPick & KICK_MASK)) ? V_WIN_SZ_US : V_WIN_SZ_US + FRAME_US;
+                           : (V.winPick & KICK_MASK) ? V_WIN_SZ_US - FRAME_US : V_WIN_SZ_US;
             if (now >= V.winAt + endUs) {
                 VWin w = V.win; uint32_t b = V.winPick;
                 V.win = W_NONE; V.winPick = 0;
