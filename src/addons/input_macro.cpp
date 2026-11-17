@@ -470,6 +470,7 @@ namespace {
         // button you press inside is hidden and remembered; its cancel starts when the window ends.
         VWin win = W_NONE;
         uint64_t winAt = 0;           // the MK press / the seismo punch press
+        uint64_t winLen = 0;          // MK window: 10f standing, 12f crouching
         uint32_t winPick = 0;
 
         uint32_t suppress = 0;        // attack bits hidden from the game until released
@@ -593,14 +594,14 @@ namespace {
         vPush(UF, LP | LK, kick - early);
         if (early) vPush(UF, LK, early);
     }
-    void seqBurn(uint32_t kick) {               // burning kick: ↓ 4-6f, ↘ 2.5-3.5f, → 1.5-2.5f, ↗ 4-6f, ↗ + kick 1.5-2.5f, ↑ + kick 1.2-1.5f
+    void seqBurn(uint32_t kick) {               // burning kick (fixed, no randomness): ↓ 5f, ↘ 3f, → 2f, ↑ 5f, ↗ + kick 2f, ↑ + kick 1f
         vClear();
-        vPush(D_, 0, randomRange(F10(40), F10(60)));
-        vPush(DF, 0, randomRange(F10(25), F10(35)));
-        vPush(F_, 0, randomRange(F10(15), F10(25)));
-        vPush(UF, 0, randomRange(F10(40), F10(60)));
-        vPush(UF, kick, randomRange(F10(15), F10(25)));
-        vPush(U_, kick, randomRange(F10(12), F10(15)));
+        vPush(D_, 0, F10(50));
+        vPush(DF, 0, F10(30));
+        vPush(F_, 0, F10(20));
+        vPush(U_, 0, F10(50));
+        vPush(UF, kick, F10(20));
+        vPush(U_, kick, F10(10));
     }
     void seqStandHP() {                         // after your st.HP / MK + LP: jump cancel -> thunder dash feint
         vClear();
@@ -735,7 +736,7 @@ namespace {
             uint32_t want = rising & ATTACK_MASK;
             if (want && !V.winPick) V.winPick = pickOne(want);
             V.suppress |= want;                   // window presses never reach the game
-            if (now >= V.winAt + (V.win == W_MK ? V_WIN_MK_US : V_WIN_SZ_US)) {
+            if (now >= V.winAt + (V.win == W_MK ? V.winLen : V_WIN_SZ_US)) {
                 VWin w = V.win; uint32_t b = V.winPick;
                 V.win = W_NONE; V.winPick = 0;
                 if (b && !V.playing && !otherMacroBusy) {
@@ -805,7 +806,8 @@ namespace {
                     else V.hpAt = 0;
                 }
             } else if ((r & ATTACK_MASK) == MK && !(phys & ATTACK_MASK & ~MK)) {
-                V.win = W_MK; V.winAt = now; V.winPick = 0;   // your MK goes out as it is; 10f window
+                V.win = W_MK; V.winAt = now; V.winPick = 0;   // your MK goes out as it is; 10f window (crouching 12f)
+                V.winLen = (rel & RD) ? V_WIN_MK_US + 2ULL * FRAME_US : V_WIN_MK_US;
             }
         }
 
