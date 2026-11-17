@@ -592,13 +592,13 @@ namespace {
         vPush(U_, btn, F10(30), seismo ? FL_SEISMO : 0);
     }
     void seqSeismo(uint32_t punches) { seqCancel(punches, true); }
-    // Burning kick (fixed): ↓ 5f, ↘ 4f, → 2f, ↗ 4f, N + kick 5f
+    // Burning kick (fixed): ↓ 5f, ↘ 4f, → 2f, ↗ 5f, N + kick 5f
     void seqBurnKick(uint32_t kick) {
         vClear();
         vPush(D_, 0, F10(50));
         vPush(DF, 0, F10(40));
         vPush(F_, 0, F10(20));
-        vPush(UF, 0, F10(40));
+        vPush(UF, 0, F10(50));
         vPush(N_, kick, F10(50));
         V.burnSeq = true;
     }
