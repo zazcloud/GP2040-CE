@@ -632,7 +632,7 @@ void NeoPicoLEDAddon::process() {
     if (g_viperActive) {
         float bx = as.GetBrightnessX() * 0.5f;   // 50% dimmer
         LEDFormat fmt = neopico.GetFormat();
-        uint32_t base  = (g_viperBurnout ? RGB(255, 0, 0) : RGB(0, 255, 0)).value(fmt, bx);
+        uint32_t base  = (g_viperBurnout ? RGB(128, 128, 128) : RGB(85, 0, 0)).value(fmt, bx);   // dim red, grey in burnout
         uint32_t white = RGB(255, 255, 255).value(fmt, bx);
         uint32_t sideMask = g_viperFacingRight ? GAMEPAD_MASK_DL : GAMEPAD_MASK_DR;
         for (auto &row : matrix.pixels) {

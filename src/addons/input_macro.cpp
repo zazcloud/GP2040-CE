@@ -435,6 +435,20 @@ namespace {
     struct VStep { uint8_t dir; uint32_t btn; uint32_t dur; uint32_t heCut; uint8_t flags; };
 
     enum VWin { W_NONE, W_MK, W_HK, W_LOOP, W_LV2, W_CHP };
+    // Jump protection for the double-press cancels (Viper, Chun-Li): for 43f after you press up, the first
+    // press of a cancel button is not part of any cancel (a normal hit in the air). Once per jump.
+    struct JumpGuard {
+        uint64_t until = 0;
+        bool used = true;
+        void arm(uint64_t now) { until = now + 43ULL * FRAME_US; used = false; }
+        bool take(uint64_t now) {                // true = this press is the protected one
+            if (used || now >= until) return false;
+            used = true;
+            return true;
+        }
+    };
+    constexpr uint32_t VIPER_CANCEL_BTNS = HP;              // buttons with a double-press cancel
+    constexpr uint32_t CHUN_CANCEL_BTNS  = HP | MP | HK;
 
     struct VState {
         bool facingRight = true;
@@ -450,9 +464,10 @@ namespace {
         bool isCrouchHP = false;      // X can cancel this one
         uint64_t chpStart = 0;
         // HP cancels, Chun-Li style: your first HP goes out as it is; a second HP inside the window is hidden
-        // and starts the cancel (st.HP: within 18f -> frame 18-23; cr.HP: within 12f -> frame 8-12)
+        // and starts the cancel (st.HP: within 18f -> right away; cr.HP: within 12f -> frame 8-12)
         uint64_t hpAt = 0, hpFireAt = 0;
         bool hpCrouch = false;
+        JumpGuard jumpGuard;
         uint32_t prevLv1Pins = 0;     // Macro 5 / 6 (Level 1)
 
         VWin win = W_NONE;
@@ -621,11 +636,10 @@ namespace {
     }
     void seqStandHP() {                         // after your st.HP: jump cancel -> thunder dash feint
         vClear();
-        addArrows({D_, DB, B_});
-        vPush(UB, HP, randomRange(F10(40), F10(70)));
-        uint8_t d6 = coin() ? B_ : UB;
-        vPush(d6, HP | LK, randomRange(F10(120), F10(160)));
-        vPush(coin() ? d6 : N_, LK, randomRange(F10(10), F10(30)));  // kick only, arrow 50/50
+        for (uint8_t d : {D_, DB, B_}) vPush(d, 0, randomRange(F10(12), F10(20)));   // fast arrows 1.2-2f
+        vPush(UB, HP, randomRange(F10(40), F10(70)));                // the jump cancel
+        vPush(B_, HP | LK, randomRange(F10(120), F10(160)));         // back from here on (never up-back)
+        vPush(coin() ? B_ : N_, LK, randomRange(F10(10), F10(30)));  // kick only, arrow 50/50
     }
     void seqCrouchHP() {                        // after your cr.HP: thunder dash feint
         vClear();
@@ -911,6 +925,9 @@ namespace {
         bool locked = now < V.jumpLockUntil;
         bool holding = !V.playing && (V.win == W_LOOP || V.win == W_MK);   // we own the stick
         if (upRising && !V.playing && !holding) setLock(now + V_JUMP_LOCK_US);   // you jumped
+        if (upRising && !V.playing && !holding) V.jumpGuard.arm(now);
+        bool cancelGuarded = false;               // this press is the protected one: it belongs to no cancel
+        if ((rising & VIPER_CANCEL_BTNS) && V.jumpGuard.take(now)) { cancelGuarded = true; V.hpAt = 0; V.hpFireAt = 0; }
         // after a jump cancel burning kick: HK opens the HK window even during the lock
         if (locked && V.afterBurn && !V.playing && V.win == W_NONE && !V.rawPending &&
                 (rising & ATTACK_MASK) == HK && !(phys & ATTACK_MASK & ~HK)) {
@@ -1056,14 +1073,18 @@ namespace {
                 V.rawPending = true; V.rawMask = r & PUNCH_MASK; V.rawStart = now;
                 V.suppress |= V.rawMask;
             } else if ((r & ATTACK_MASK) == HP && !(phys & ATTACK_MASK & ~HP)) {
-                if (V.hpAt && !V.hpFireAt && now - V.hpAt < (V.hpCrouch ? 12ULL : 18ULL) * FRAME_US) {
-                    // second HP inside the window: hidden, the cancel starts at a random frame of its range
-                    // (a late second press: between its own frame and the end of the range)
+                if (cancelGuarded) {
+                    // protected press after a jump: a normal hit
+                } else if (V.hpAt && !V.hpFireAt && now - V.hpAt < (V.hpCrouch ? 12ULL : 18ULL) * FRAME_US) {
+                    // second HP inside the window: hidden. st.HP: the cancel starts right away. cr.HP: at a random
+                    // frame 8-12 from the first HP (a late second press: between its own frame and frame 12)
                     V.suppress |= HP;
-                    uint64_t lo = V.hpAt + (V.hpCrouch ? 7ULL : 17ULL) * FRAME_US;    // frame 8 / 18
-                    uint64_t hi = V.hpAt + (V.hpCrouch ? 11ULL : 22ULL) * FRAME_US;   // frame 12 / 23
-                    if (lo < now) lo = now;
-                    V.hpFireAt = (hi > lo) ? lo + randomRange(0, (uint32_t)(hi - lo)) : now;
+                    if (!V.hpCrouch) V.hpFireAt = now;
+                    else {
+                        uint64_t lo = V.hpAt + 7ULL * FRAME_US, hi = V.hpAt + 11ULL * FRAME_US;
+                        if (lo < now) lo = now;
+                        V.hpFireAt = (hi > lo) ? lo + randomRange(0, (uint32_t)(hi - lo)) : now;
+                    }
                 } else if (!V.hpFireAt) {
                     // first HP: your own hit. Crouching (↓ or a down-diagonal), or standing / walking; an HP right
                     // after a motion or a qcb macro is a special move and arms nothing
@@ -1228,6 +1249,7 @@ namespace {
         // this poll:
         uint32_t rise = 0, phys = 0, physRise = 0;
         uint8_t  prel = 0, ad = 0;
+        bool     upRise = false;                     // you pressed up this poll (any jump); needs ENG_JUMP
         void read(Gamepad* gp, uint32_t pinMask, uint64_t now, int what) {
             uint32_t pins = (uint32_t)gp->debouncedGpio & pinMask;
             rise = pins & ~prevPins; prevPins = pins;
@@ -1236,7 +1258,9 @@ namespace {
             V.suppress &= phys;                      // released buttons are no longer hidden
             prel = toRel(gp->state.dpad);
             if (what & ENG_STICK) ad = cleanStick(gp);
+            upRise = false;
             if (what & ENG_JUMP) {                   // the moment you pressed a diagonal jump (↗ or ↖)
+                upRise = (ad & GAMEPAD_MASK_UP) && !(prevAbs & GAMEPAD_MASK_UP);
                 const uint8_t UR = GAMEPAD_MASK_UP | GAMEPAD_MASK_RIGHT, UL = GAMEPAD_MASK_UP | GAMEPAD_MASK_LEFT;
                 bool urNow = (ad & UR) == UR && !(ad & GAMEPAD_MASK_DOWN), ulNow = (ad & UL) == UL && !(ad & GAMEPAD_MASK_DOWN);
                 if (urNow && (prevAbs & UR) != UR) { jumpAt = now; jumpDir = +1; }
@@ -1738,6 +1762,7 @@ namespace {
     // (a late second press: between its own frame and the end of the range)
     uint64_t chunHPAt = 0, chunHPFireAt = 0, chunMPAt = 0, chunHKAt = 0;
     bool     chunHPCrouch = false;                  // first HP was crouching
+    JumpGuard chunGuard;
     void chunArm(uint64_t first, uint64_t loFrame, uint64_t hiFrame, uint64_t now) {
         uint64_t lo = first + (loFrame - 1) * FRAME_US, hi = first + (hiFrame - 1) * FRAME_US;
         if (lo < now) lo = now;
@@ -1748,12 +1773,18 @@ namespace {
         e.read(gp, m[0] | m[1] | m[2] | m[3] | m[4] | m[5], now, ENG_STICK | ENG_JUMP);
         uint32_t rise = e.rise, phys = e.phys, physRise = e.physRise;
         uint8_t ad = e.ad;
+        if (e.upRise) chunGuard.arm(now);
         if (V.playing) {
             e.airOD(physRise & KICK_MASK, now);
             if (e.run(gp, now)) return true;
         }
         if (macroBusy) return false;
-        if (physRise & HP) {
+        uint32_t cr = physRise;                     // presses that count for the double-press cancels
+        if ((cr & CHUN_CANCEL_BTNS) && chunGuard.take(now)) {   // protected press after a jump: a normal hit
+            cr &= ~CHUN_CANCEL_BTNS;
+            chunHPAt = 0; chunMPAt = 0; chunHKAt = 0; chunHPFireAt = 0;
+        }
+        if (cr & HP) {
             if (chunHPAt && !chunHPFireAt && now - chunHPAt < (chunHPCrouch ? 18ULL : 12ULL) * FRAME_US) {   // second HP inside the window
                 V.suppress |= HP;
                 if (chunHPCrouch) chunArm(chunHPAt, 18, 23, now); else chunArm(chunHPAt, 8, 12, now);
@@ -1762,7 +1793,7 @@ namespace {
                 chunHPCrouch = (ad & GAMEPAD_MASK_DOWN) != 0;
             }
         }
-        if (physRise & MP) {
+        if (cr & MP) {
             if (chunMPAt && !chunHPFireAt && now - chunMPAt < 12ULL * FRAME_US) {   // second MP inside 12f
                 V.suppress |= MP;
                 chunArm(chunMPAt, 8, 12, now);
@@ -1771,7 +1802,7 @@ namespace {
                 chunMPAt = (ad & GAMEPAD_MASK_DOWN) ? now : 0;   // only a crouching MP starts it
             }
         }
-        if (physRise & HK) {
+        if (cr & HK) {
             if (chunHKAt && !chunHPFireAt && now - chunHKAt < 18ULL * FRAME_US) {   // second HK inside 18f
                 V.suppress |= HK;
                 chunArm(chunHKAt, 18, 23, now);
@@ -2282,7 +2313,7 @@ void InputMacro::preprocess()
             lilySpd = false; lilyOD = false;
             lukeHoldBtn = 0; lukeSuppress = 0; lukeTaken = false;
             g_sagatBurnout = false;
-            V.hpAt = 0; V.hpFireAt = 0; lvl3Until = 0; manonHPAt = 0; arjinHKHold = false; arjinBlockUntil = 0; arjinPendUntil = 0; arjinPending = 0; arjinDownSwallow = false;
+            V.hpAt = 0; V.hpFireAt = 0; V.jumpGuard = JumpGuard(); chunGuard = JumpGuard(); lvl3Until = 0; manonHPAt = 0; arjinHKHold = false; arjinBlockUntil = 0; arjinPendUntil = 0; arjinPending = 0; arjinDownSwallow = false;
             cgrab = false; pinkHKHold = false; pinkHoldAfter = false;
             for (int i = 0; i < MAX_MACRO_LIMIT; i++) gearMask[i] = 0;
             if (cammyActive) { gearMask[0] = LK; gearMask[1] = LK; }   // Cammy DP gear starts on LK
