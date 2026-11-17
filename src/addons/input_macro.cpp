@@ -146,7 +146,6 @@ namespace {
     constexpr uint32_t TOGGLE_PIN_MASK = 1u << 20;
     bool macrosOn = true;
     bool prevTogglePin = false;
-    bool airSwallow = false;   // macro button pressed in the air: ignore it until released
 
     // CUSTOM: Sagat macro set (from final.gp2040), built into the firmware
     MacroOptions g_sagatOpts;
@@ -431,10 +430,11 @@ namespace {
     constexpr uint8_t FL_BACK      = 16;  // loop opened here can be released with ← (seismo after MK)
     constexpr uint8_t FL_USER_DIR  = 32;  // the stick stays the user's during this step (buttons still ours)
     constexpr uint8_t FL_OWN_CUT   = 64;  // this step sets its own early arrow release (heCut), not the general rule
+    constexpr uint8_t FL_SEISMO    = 128; // the seismo punch: the 20f seismo window opens when this step starts
 
     struct VStep { uint8_t dir; uint32_t btn; uint32_t dur; uint32_t heCut; uint8_t flags; };
 
-    enum VWin { W_NONE, W_MK, W_HK, W_LOOP, W_LV2, W_CHP };
+    enum VWin { W_NONE, W_MK, W_SZ };       // open window: after your MK (10f), after a seismo (20f)
     // Jump protection for the double-press cancels (Viper, Chun-Li): for 43f after you press up, the first
     // press of a cancel button is not part of any cancel (a normal hit in the air). Once per jump.
     struct JumpGuard {
@@ -447,7 +447,7 @@ namespace {
             return true;
         }
     };
-    constexpr uint32_t VIPER_CANCEL_BTNS = HP;              // buttons with a double-press cancel
+    constexpr uint32_t VIPER_CANCEL_BTNS = HP | MK;         // buttons that start a cancel (HP double press, MK window)
     constexpr uint32_t CHUN_CANCEL_BTNS  = HP | MP | HK;
 
     struct VState {
@@ -458,11 +458,7 @@ namespace {
         int seqLen = 0, seqPos = 0;
         bool playing = false;
         uint64_t stepStart = 0;
-        uint32_t seqTrigger = 0;      // button that started this sequence (for chord guard)
-        uint64_t guardUntil = 0;      // other attack rising before this = cancel trigger
-        bool lv2Pending = false;      // open Level 2 window when sequence ends
         bool isCrouchHP = false;      // X can cancel this one
-        uint64_t chpStart = 0;
         // HP cancels, Chun-Li style: your first HP goes out as it is; a second HP inside the window is hidden
         // and starts the cancel (st.HP: within 18f -> right away; cr.HP: within 12f -> frame 8-12)
         uint64_t hpAt = 0, hpFireAt = 0;
@@ -470,45 +466,17 @@ namespace {
         JumpGuard jumpGuard;
         uint32_t prevLv1Pins = 0;     // Macro 5 / 6 (Level 1)
 
+        // Windows: after your MK (10f from the press) and after any seismo (20f from its punch). The first
+        // button you press inside is hidden and remembered; its cancel starts when the window ends.
         VWin win = W_NONE;
-        uint64_t winDeadline = 0;
-        bool winGuard = false;        // MK/HK window: cancel if a 2nd attack comes right away
-
-        bool chordPending = false;
-        uint32_t chordMask = 0, chordFirst = 0;
-        uint64_t chordStart = 0;
-
-        uint32_t bufMask = 0, bufFirst = 0;   // pressed while a sequence was playing
-        uint64_t bufStart = 0;
-        bool bufJump = false;
+        uint64_t winAt = 0;           // the MK press / the seismo punch press
+        uint32_t winPick = 0;
 
         uint32_t suppress = 0;        // attack bits hidden from the game until released
         uint32_t prevButtons = 0;
         uint8_t  prevRel = 0;
-        uint64_t jumpLockUntil = 0;   // Viper triggers off (first attack in the air ends it)
-        uint64_t airUntil = 0;        // macro buttons off for the whole jump
-        uint64_t noCancelUntil = 0;   // after the loop runs out: no cancels
-        uint32_t loopPunch = 0;       // punch held with → during the loop
-        uint64_t holdFrom = 0;        // loop/MK hold output starts here
-        uint8_t  mkDir = 0;           // N or ↓ held with MK
-        uint32_t prevSuper = 0;
-        bool superCancel = false;     // a macro super cancelled the loop this poll
-        bool loopBack = false;        // ← releases this loop hold (↙ always does)
-        bool prevQcb = false;
-        uint64_t loopStart = 0;       // seismo punch press that opened this loop
-        uint32_t pendMask = 0;        // loop cancel waiting for its time
-        bool pendKick = false;
-        uint64_t pendAt = 0;
-        uint64_t hkStart = 0;         // st.HK press (OD burning kick timing)
-        uint64_t mkStart = 0;         // MK press (burning kick timing)
-        uint64_t delayedAt = 0;       // a built sequence waiting to start
-        uint64_t qcbBlockUntil = 0;   // after a qcb macro (Macro 1/2): no st.HP macro for 57f
+        uint64_t qcbBlockUntil = 0;   // after a qcb macro (Macro 1/2): no st.HP cancel for 57f
         uint32_t prevQcbPins = 0;
-        bool nextAfterBurn = false, afterBurn = false;
-        bool rawPending = false;      // your own seismo: punch held back up to 3f to catch OD
-        uint32_t rawMask = 0;
-        uint64_t rawStart = 0;
-
         bool prevBurn = false;
 
         // direction history (relative codes)
@@ -517,7 +485,6 @@ namespace {
         int hHead = 0, hCount = 0;
     } V;
 
-    void setLock(uint64_t until) { V.jumpLockUntil = until; V.airUntil = until; }
     uint32_t vArrow() { return randomRange(V_ARROW_MIN, V_ARROW_MAX); }
     uint32_t vBtn()   { return randomRange(BTN_MIN_US, BTN_MAX_US); }
 
@@ -599,86 +566,51 @@ namespace {
     }
 
     // ---------------------------------------------------------- sequences
-    void addArrows(std::initializer_list<uint8_t> dirs) {
-        for (uint8_t d : dirs) vPush(d, 0, vArrow());
+    void seqArrows(std::initializer_list<uint8_t> dirs, uint32_t lo10, uint32_t hi10) {
+        for (uint8_t d : dirs) vPush(d, 0, randomRange(F10(lo10), F10(hi10)));
     }
-
-    void seqJump()                  { vClear(); addArrows({D_, DF, F_, UF}); vPush(U_, 0, vArrow(), FL_JUMP); }
-    void seqSeismo(uint32_t punches, bool walk) {   // jump-cancel seismo: ↓ ↘ → ↗ ↑, then N + punch
+    // jump cancel motion of the seismo: ↓ 1.5-2.5f, ↘ 1.2-1.5f, → 1.5-2.5f, ↗ 1.5-2.5f
+    void seismoMotion() {
         vClear();
-        vPush(N_, 0, randomRange(F10(30), F10(50)));   // neutral 3-5f before every seismo
-        if (walk) vPush(F_, 0, randomRange(F10(60), F10(110)));
-        for (uint8_t d : {D_, DF, F_, UF, U_}) vPush(d, 0, randomRange(F10(12), F10(25)));
-        vPush(N_, punches, vBtn(), FL_OPEN_LOOP);
+        vPush(D_, 0, randomRange(F10(15), F10(25)));
+        vPush(DF, 0, randomRange(F10(12), F10(15)));
+        vPush(F_, 0, randomRange(F10(15), F10(25)));
+        vPush(UF, 0, randomRange(F10(15), F10(25)));
     }
-    void seqFeint(bool walk) {                  // jump-cancel seismo feint
+    void seqSeismo(uint32_t punches) {          // ... then ↗ + punch 3-5f (opens the seismo window)
+        seismoMotion();
+        vPush(UF, punches, randomRange(F10(30), F10(50)), FL_SEISMO);
+    }
+    void seqSeismoFeint() {                     // ... then ↗ + LP 3-4f, LK joins for 3-4f; LP lets go with it or 1-2f earlier
+        seismoMotion();
+        vPush(UF, LP, randomRange(F10(30), F10(40)));
+        uint32_t kick = randomRange(F10(30), F10(40));
+        uint32_t early = coin() ? 0 : randomRange(F10(10), F10(20));
+        vPush(UF, LP | LK, kick - early);
+        if (early) vPush(UF, LK, early);
+    }
+    void seqBurn(uint32_t kick) {               // burning kick: ↓ 4-6f, ↘ 2.5-3.5f, → 1.5-2.5f, ↗ 4-6f, ↗ + kick 1.5-2.5f, ↑ + kick 1.2-1.5f
         vClear();
-        if (walk) vPush(F_, 0, randomRange(F10(60), F10(110)));
-        addArrows({D_, DF, F_, UF});
-        vPush(U_, HP | LK, randomRange(F10(40), F10(70)));
-        vPush(U_, coin() ? LK : HP, randomRange(F10(50), F10(90)));
+        vPush(D_, 0, randomRange(F10(40), F10(60)));
+        vPush(DF, 0, randomRange(F10(25), F10(35)));
+        vPush(F_, 0, randomRange(F10(15), F10(25)));
+        vPush(UF, 0, randomRange(F10(40), F10(60)));
+        vPush(UF, kick, randomRange(F10(15), F10(25)));
+        vPush(U_, kick, randomRange(F10(12), F10(15)));
     }
-    void seqBurn(uint32_t kicks) {              // jump cancel burning kick: ↓ ↘ → ↗ ↑ (1.2-2f), then N + kick
+    void seqStandHP() {                         // after your st.HP / MK + LP: jump cancel -> thunder dash feint
         vClear();
-        for (uint8_t d : {D_, DF, F_, UF}) vPush(d, 0, randomRange(F10(12), F10(20)));
-        vPush(U_, 0, randomRange(F10(12), F10(20)));   // no jump lock after a burning kick
-        vPush(N_, kicks, vBtn());
-    }
-    void seqHKThunder() {                       // st.HK + Macro 1: jump cancel thunder dash, no LK
-        vClear(); addArrows({D_, DB, B_});
-        vPush(UB, HP, randomRange(F10(40), F10(70)));
-        vPush(coin() ? B_ : UB, HP, randomRange(F10(70), F10(120)));
-    }
-    void seqThunder(uint32_t punches) {        // jump cancel thunder dash
-        vClear(); addArrows({D_, DB, B_, UB});
-        vPush(UB, punches, randomRange(F10(15), F10(25)));
-        vPush(coin() ? B_ : UB, punches, vBtn());
-    }
-    void seqStandHP() {                         // after your st.HP: jump cancel -> thunder dash feint
-        vClear();
-        for (uint8_t d : {D_, DB, B_}) vPush(d, 0, randomRange(F10(12), F10(20)));   // fast arrows 1.2-2f
+        seqArrows({D_, DB, B_}, 12, 20);                             // fast arrows 1.2-2f
         vPush(UB, HP, randomRange(F10(40), F10(70)));                // the jump cancel
         vPush(B_, HP | LK, randomRange(F10(120), F10(160)));         // back from here on (never up-back)
         vPush(coin() ? B_ : N_, LK, randomRange(F10(10), F10(30)));  // kick only, arrow 50/50
     }
     void seqCrouchHP() {                        // after your cr.HP: thunder dash feint
         vClear();
-        vPush(D_, 0, randomRange(F10(12), F10(20)));          // the ↓ that used to come with the ↓ + HP step
-        vPush(DB, 0, randomRange(F10(12), F10(20)));
+        seqArrows({D_, DB}, 12, 20);
         vPush(B_, 0, randomRange(F10(50), F10(70)));
-        uint32_t s4 = randomRange(F10(15), F10(25));
-        vPush(B_, HP, s4);
-        vPush(B_, HP | LK, randomRange(F10(120), F10(140)));  // 12-14f
-        vPush(B_, LK, randomRange(F10(10), F10(30)));         // punch released, kick held 1-3f
-    }
-    void seqSeismoNormal(uint32_t punches) {    // cr.HP cancel seismo: ↘ ↓ ↘, then ↘ + punch
-        vClear();
-        vPush(DF, 0, randomRange(F10(12), F10(30)));
-        vPush(D_, 0, randomRange(F10(12), F10(30)));
-        vPush(DF, 0, randomRange(F10(12), F10(20)));
-        vPush(DF, punches, randomRange(F10(12), F10(30)), FL_OPEN_LOOP);
-    }
-    // after MK: ↓ ↘ → ↗ (1.2-2f each), then the button on ↑ (straight up)
-    void mkMotion() {
-        vClear();
-        for (uint8_t d : {D_, DF, F_, UF}) vPush(d, 0, randomRange(F10(12), F10(20)));
-    }
-    void seqMKSeismo(uint32_t punches) {        // N 3-5f, ↓ ↘ → ↗, ↑ 1.5-3f, then N + punch
-        vClear();
-        vPush(N_, 0, randomRange(F10(30), F10(50)));
-        for (uint8_t d : {D_, DF, F_, UF}) vPush(d, 0, randomRange(F10(12), F10(20)));
-        vPush(U_, 0, randomRange(F10(15), F10(30)));
-        vPush(N_, punches, vBtn(), FL_OPEN_LOOP | FL_BACK);
-    }
-    void seqMKFeint() {
-        mkMotion();
-        vPush(U_, HP | LK, randomRange(F10(40), F10(70)));
-        vPush(U_, coin() ? LK : HP, randomRange(F10(50), F10(90)));
-    }
-    void seqMKBurn(uint32_t kicks) {            // ↑ alone, then N + kick (no jump lock)
-        mkMotion();
-        vPush(U_, 0, randomRange(F10(12), F10(20)));
-        vPush(N_, kicks, vBtn());
+        vPush(B_, HP, randomRange(F10(15), F10(25)));
+        vPush(B_, HP | LK, randomRange(F10(120), F10(130)));         // 12-13f, both let go together
     }
     void superArrowsAndFinish(std::initializer_list<uint8_t> dirs, uint8_t lastDir, uint32_t btn) {
         vClear();
@@ -708,15 +640,11 @@ namespace {
     }
 
     void startSeq(uint64_t now, uint32_t trigger, uint64_t guardUs) {
+        (void)trigger; (void)guardUs;
         V.playing = V.seqLen > 0;
         V.isCrouchHP = false;
         V.seqPos = 0;
         V.stepStart = now;
-        V.seqTrigger = trigger;
-        V.guardUntil = now + guardUs;
-        V.bufMask = 0; V.bufFirst = 0; V.bufJump = false;
-        V.chordPending = false;
-        V.afterBurn = V.nextAfterBurn; V.nextAfterBurn = false;
         for (int i = 0; i < V.seqLen; i++) if (!(V.seq[i].flags & FL_OWN_CUT)) V.seq[i].heCut = 0;
         for (int i = V.seqLen - 1; i >= 0; i--) {       // early arrow release on the last arrow + button step
             const VStep& st = V.seq[i];
@@ -725,117 +653,20 @@ namespace {
                 break;
             }
         }
-        if (V.seqLen > 0 && (V.seq[0].flags & FL_JUMP)) setLock(now + V.seq[0].dur + V_JUMP_LOCK_US);
-    }
-
-    void closeWindow(uint64_t now) {
-        (void)now;
-        V.win = W_NONE; V.chordPending = false; V.winGuard = false;
-        V.pendMask = 0;
-    }
-    void openLoop(uint64_t start, uint32_t punches, uint64_t holdFrom, bool backRelease = false) {
-        V.win = W_LOOP; V.winDeadline = start + V_WIN_LOOP_US; V.winGuard = false;
-        V.loopPunch = punches; V.holdFrom = holdFrom; V.loopBack = backRelease;
-        V.loopStart = start; V.pendMask = 0;
-    }
-    // loop: jump cancel seismo the way you do it: ↓ ↘ → ↗, ↗ + punch 1f, → + punch
-    void seqLoopJC(uint32_t punches) {
-        vClear();
-        vPush(D_, 0, randomRange(F10(50), F10(70)));
-        vPush(DF, 0, randomRange(F10(20), F10(40)));
-        vPush(F_, 0, randomRange(F10(10), F10(20)));
-        vPush(UF, 0, randomRange(F10(40), F10(60)));
-        vPush(UF, punches, F10(10), FL_OPEN_LOOP);           // the new seismo starts here
-        vPush(F_, punches, randomRange(F10(80), F10(100)));
-    }
-    // loop press: punch -> JC seismo at 20-22f, kick -> burning kick at 34-36f (from the seismo press).
-    // Returns false for anything else (feint etc. are handled right away by resolveWindow).
-    bool loopSchedule(uint32_t mask, uint32_t first, uint64_t now) {
-        (void)now;
-        if ((mask & LP) && (mask & LK)) return false;
-        uint32_t punches = mask & PUNCH_MASK, kicks = mask & KICK_MASK;
-        if (punches && kicks) { if (first & PUNCH_MASK) kicks = 0; else punches = 0; }
-        if (punches) {
-            V.pendMask = popcount32(punches) >= 2 ? punches : lowestBit(punches);
-            V.pendKick = false;
-            V.pendAt = V.loopStart + randomRange(20 * FRAME_US, 22 * FRAME_US);
-            return true;
-        }
-        if (kicks) {
-            V.pendMask = popcount32(kicks) >= 2 ? (MK | HK) : kicks;
-            V.pendKick = true;
-            V.pendAt = V.loopStart + randomRange(34 * FRAME_US, 36 * FRAME_US);
-            return true;
-        }
-        return false;
-    }
-
-    // Decide what a window press means. Returns true if a sequence was started.
-    bool resolveWindow(uint32_t mask, uint32_t first, bool jump, uint64_t now) {
-        VWin w = V.win;
-        closeWindow(now);
-        V.lv2Pending = false;
-        if (jump && w == W_HK) { seqJump(); startSeq(now, 0, 0); return true; }
-
-        if (w == W_LV2) {
-            if (mask & LK) { seqLevel2(); startSeq(now, 0, 0); return true; }
-            return false;
-        }
-        if (w == W_CHP) {                     // within 10f of cr.HP: punch = plain seismo
-            uint32_t p = mask & PUNCH_MASK;
-            if (!p) return false;
-            seqSeismoNormal(popcount32(p) >= 2 ? p : lowestBit(p));
-            startSeq(now, 0, 0); return true;
-        }
-
-        uint32_t punches = mask & PUNCH_MASK, kicks = mask & KICK_MASK;
-        if (w == W_MK) {                      // MK: new motion, button on N
-            if ((mask & LP) && (mask & LK)) { seqMKFeint(); startSeq(now, 0, 0); return true; }
-            if (popcount32(punches) >= 2) { seqMKSeismo(punches); startSeq(now, 0, 0); return true; }
-            if (punches && kicks) { if (first & PUNCH_MASK) kicks = 0; else punches = 0; }
-            if (punches) { seqMKSeismo(lowestBit(punches)); startSeq(now, 0, 0); return true; }
-            if (popcount32(kicks) >= 2) { seqMKBurn(MK | HK); startSeq(now, 0, 0); return true; }
-            if (kicks) { seqMKBurn(kicks); startSeq(now, 0, 0); return true; }
-            return false;
-        }
-        bool walk = (w != W_LOOP);            // loop: already holding →, start at ↓
-        if ((mask & LP) && (mask & LK)) { seqFeint(walk); startSeq(now, 0, 0); return true; }
-        if (popcount32(punches) >= 2) { seqSeismo(punches, walk); startSeq(now, 0, 0); return true; }
-        if (punches && kicks) {               // mixed: take the button pressed first
-            if (first & PUNCH_MASK) kicks = 0; else punches = 0;
-        }
-        if (punches) { seqSeismo(lowestBit(punches), walk); startSeq(now, 0, 0); return true; }
-        if (kicks) {
-            if (w == W_HK) {
-                if (popcount32(kicks) != 1) return false;
-                if (kicks == HK) { seqThunder(HP); startSeq(now, 0, 0); return true; }
-                if (kicks == MK) { seqBurn(MK | HK); startSeq(now, 0, 0); return true; }
-                if (kicks == LK) { seqThunder(MP | HP); V.lv2Pending = true; startSeq(now, 0, 0); return true; }
-                return false;
-            }
-            if (popcount32(kicks) >= 2) { seqBurn(MK | HK); startSeq(now, 0, 0); return true; }
-            seqBurn(kicks); startSeq(now, 0, 0); return true;
-        }
-        return false;
     }
 
     // Output the current sequence step into the gamepad state. Returns false when finished.
     bool runSeq(Gamepad* gp, uint64_t now, uint8_t physRel) {
+        (void)physRel;
         while (V.playing) {
             VStep& st = V.seq[V.seqPos];
-            if ((st.flags & FL_ABORT_FWD) && physRel == F_) {   // cr.HP: walking forward cancels
-                V.playing = false;
-                V.suppress &= ~V.seqTrigger;
-                return false;
-            }
             if (now - V.stepStart < st.dur) break;
             V.stepStart += st.dur;
             V.seqPos++;
             if (V.seqPos >= V.seqLen) { V.playing = false; return false; }
-            VStep& nx = V.seq[V.seqPos];
-            if (nx.flags & FL_JUMP) setLock(V.stepStart + nx.dur + V_JUMP_LOCK_US);   // lock starts after ↑
-            if (nx.flags & FL_LOCK) setLock(V.stepStart + V_JUMP_LOCK_US);           // lock starts at the kick
-            if (nx.flags & FL_OPEN_LOOP) openLoop(V.stepStart, nx.btn, V.stepStart, (nx.flags & FL_BACK) != 0);
+            if (V.seq[V.seqPos].flags & FL_SEISMO) {    // the seismo punch comes out now: its 20f window opens
+                V.win = W_SZ; V.winAt = V.stepStart; V.winPick = 0;
+            }
         }
         if (!V.playing) return false;
         VStep& st = V.seq[V.seqPos];
@@ -846,22 +677,32 @@ namespace {
         return true;
     }
 
+    // ---------------------------------------------------------- Viper engine
+    //  HP (standing / walking, or crouching): your own hit; HP again inside 18f (crouch 12f) = the thunder feint cancel
+    //  MK (standing or crouching): your own hit; 10f window: MP = seismo, LP = the st.HP feint, HP = OD seismo (LP+MP)
+    //  any seismo (yours or a macro's): 20f window: LP = seismo feint, MP / HP = seismo, LK / MK / HK = burning kick
+    //  a window's cancel starts when the window ends, even if you pressed earlier
+    //  Macro 5 / 6 = Level 1 (fixed on screen); burnout (turbo button): X = Level 1
+    //  jump protection: 43f after you press up, the first HP / MK press starts nothing (once per jump)
+    constexpr uint64_t V_WIN_MK_US = 10ULL * FRAME_US;
+    constexpr uint64_t V_WIN_SZ_US = 20ULL * FRAME_US;
+    uint32_t pickOne(uint32_t m) {               // one button out of a press: LP, MP, HP, LK, MK, HK in that order
+        for (uint32_t b : {LP, MP, HP, LK, MK, HK}) if (m & b) return b;
+        return 0;
+    }
+    void viperReset() {
+        V.playing = false; V.win = W_NONE; V.winPick = 0; V.suppress = 0;
+        V.hpAt = 0; V.hpFireAt = 0; V.jumpGuard = JumpGuard();
+    }
     // Returns true when the Viper engine owns the output this poll.
-    bool viperProcess(Gamepad* gp, uint64_t now, uint32_t m5, uint32_t m6, uint32_t burnPin, uint32_t superPins, uint32_t qcbPin, uint32_t qcbPins, bool otherMacroBusy) {
+    bool viperProcess(Gamepad* gp, uint64_t now, uint32_t m5, uint32_t m6, uint32_t burnPin, uint32_t qcbPins, bool otherMacroBusy) {
         Mask_t pins = gp->debouncedGpio;
         uint32_t qcbAll = (uint32_t)(pins & qcbPins);
-        if (qcbAll & ~V.prevQcbPins) V.qcbBlockUntil = now + 57ULL * FRAME_US;   // qcb pressed
+        if (qcbAll & ~V.prevQcbPins) V.qcbBlockUntil = now + 57ULL * FRAME_US;   // qcb macro pressed
         V.prevQcbPins = qcbAll;
-        bool qcbNow = qcbPin && (pins & qcbPin);
-        bool qcbRising = qcbNow && !V.prevQcb;
-        V.prevQcb = qcbNow;
-        uint32_t superNow = (uint32_t)(pins & superPins);
-        uint32_t superRising = superNow & ~V.prevSuper;
-        V.prevSuper = superNow;
-
-        // ---- burnout toggle (turbo button, like the other profiles); the side is automatic (down-diagonal held 10f)
+        // burnout toggle (turbo button, like the other profiles); the side is automatic (down-diagonal held 10f)
         bool bo = burnPin && (pins & burnPin);
-        if (bo && !V.prevBurn)   { V.burnout = !V.burnout; g_viperBurnout = V.burnout; }
+        if (bo && !V.prevBurn) { V.burnout = !V.burnout; g_viperBurnout = V.burnout; }
         V.prevBurn = bo;
         uint32_t lv1Now = (uint32_t)(pins & (m5 | m6));
         uint32_t lv1Rising = lv1Now & ~V.prevLv1Pins;   // Macro 5 / 6: Level 1, fixed on screen
@@ -871,211 +712,76 @@ namespace {
         uint8_t rel = toRel(gp->state.dpad);
         uint32_t rising = phys & ~V.prevButtons;
         bool upRising = (rel & RU) && !(V.prevRel & RU);
-        bool ufRising = (rel == UF) && (V.prevRel != UF);
         V.prevButtons = phys;
         V.prevRel = rel;
-
-        // direction history
-        if (V.hCount == 0 || V.hCode[V.hHead] != rel) histPush(rel, now);
-
+        if (V.hCount == 0 || V.hCode[V.hHead] != rel) histPush(rel, now);   // direction history
         V.suppress &= phys;                       // released buttons are no longer hidden
+
+        // ---- jump protection: the first HP / MK press after your jump is a normal hit and starts nothing
+        if (upRising && !V.playing) V.jumpGuard.arm(now);
+        uint32_t r = rising;                      // presses that may start something
+        if ((r & VIPER_CANCEL_BTNS) && V.jumpGuard.take(now)) {
+            r &= ~VIPER_CANCEL_BTNS;
+            V.hpAt = 0; V.hpFireAt = 0;
+        }
+
+        // ---- open window: remember the first button, start its cancel when the window ends
+        if (V.win != W_NONE) {
+            uint32_t want = rising & (V.win == W_MK ? PUNCH_MASK : ATTACK_MASK);
+            if (want && !V.winPick) V.winPick = pickOne(want);
+            V.suppress |= want;                   // window presses never reach the game
+            if (now >= V.winAt + (V.win == W_MK ? V_WIN_MK_US : V_WIN_SZ_US)) {
+                VWin w = V.win; uint32_t b = V.winPick;
+                V.win = W_NONE; V.winPick = 0;
+                if (b && !V.playing && !otherMacroBusy) {
+                    if (w == W_MK) {
+                        if (b == LP) seqStandHP(); else seqSeismo(b == HP ? (LP | MP) : MP);
+                    } else {
+                        if (b == LP) seqSeismoFeint();
+                        else if (b & PUNCH_MASK) seqSeismo(b);
+                        else seqBurn(b);
+                    }
+                    startSeq(now, 0, 0);
+                }
+            }
+        }
 
         // ---- a sequence is playing
         if (V.playing && V.isCrouchHP && (rising & XBTN)) {
-            // X cancels cr.HP: Level 1 in burnout, otherwise X goes to the game
+            // X cancels the cr.HP cancel: Level 1 in burnout, otherwise X goes to the game
             V.playing = false;
-            V.suppress &= ~V.seqTrigger;
-            if (V.burnout) {
-                V.suppress |= XBTN;
-                seqLevel1(); startSeq(now, 0, 0);
-                if (runSeq(gp, now, rel)) return true;
-            }
+            if (V.burnout) { V.suppress |= XBTN; seqLevel1(); startSeq(now, 0, 0); }
         }
         if (V.playing) {
-            // trigger chord guard: another attack right after HP = player meant something else
-            if (V.seqTrigger && now < V.guardUntil && (rising & ATTACK_MASK & ~V.seqTrigger)) {
-                V.playing = false;
-                V.suppress &= ~V.seqTrigger;
-            } else {
-                // remember presses for the next window (seismo loop / Level 2)
-                bool armed = V.lv2Pending || V.win != W_NONE;
-                uint32_t r = rising & (V.lv2Pending ? LK : ATTACK_MASK);
-                if (armed && r) {
-                    if (!V.bufMask) { V.bufFirst = lowestBit(r); V.bufStart = now; }
-                    V.bufMask |= r;
-                }
-                V.suppress |= rising & ATTACK_MASK;   // never leak a press into the game mid-move
-                if (ufRising && !V.lv2Pending && V.win == W_HK) V.bufJump = true;
-                if (runSeq(gp, now, rel)) return true;
-                // sequence just finished
-                if (V.lv2Pending) { V.lv2Pending = false; V.win = W_LV2; V.winDeadline = now + V_WIN_LV2_US; }
-                if (V.win != W_NONE && (V.bufMask || V.bufJump)) {
-                    if (V.bufJump) {
-                        V.bufMask = 0; V.bufJump = false;
-                        if (resolveWindow(0, 0, true, now) && runSeq(gp, now, rel)) return true;
-                    } else {
-                        V.chordPending = true;
-                        V.chordMask = V.bufMask; V.chordFirst = V.bufFirst; V.chordStart = V.bufStart;
-                        V.bufMask = 0;
-                    }
-                }
-            }
-        }
-
-        bool locked = now < V.jumpLockUntil;
-        bool holding = !V.playing && (V.win == W_LOOP || V.win == W_MK);   // we own the stick
-        if (upRising && !V.playing && !holding) setLock(now + V_JUMP_LOCK_US);   // you jumped
-        if (upRising && !V.playing && !holding) V.jumpGuard.arm(now);
-        bool cancelGuarded = false;               // this press is the protected one: it belongs to no cancel
-        if ((rising & VIPER_CANCEL_BTNS) && V.jumpGuard.take(now)) { cancelGuarded = true; V.hpAt = 0; V.hpFireAt = 0; }
-        // after a jump cancel burning kick: HK opens the HK window even during the lock
-        if (locked && V.afterBurn && !V.playing && V.win == W_NONE && !V.rawPending &&
-                (rising & ATTACK_MASK) == HK && !(phys & ATTACK_MASK & ~HK)) {
-            V.afterBurn = false;
-            V.win = W_HK; V.winDeadline = now + V_WIN_HK_US;
-            V.winGuard = true; V.seqTrigger = HK; V.guardUntil = now + V_CHORD_US;
-            V.hkStart = now;
-            rising &= ~HK;                        // not the "first attack" that ends the lock
-        }
-        if (!locked) V.afterBurn = false;
-        // first attack in the air goes to the game and ends the lock (the next one can trigger)
-        if (locked && !V.playing && V.win == W_NONE && (rising & ATTACK_MASK)) V.jumpLockUntil = 0;
-
-        // ---- window handling
-        // ---- your own seismo: punch held back up to 3f, then sent (two punches = OD), then the loop hold
-        if (V.rawPending) {
-            uint32_t p = rising & PUNCH_MASK;
-            V.rawMask |= p; V.suppress |= p;
-            if (popcount32(V.rawMask) >= 2 || now - V.rawStart >= V_CHORD_WIN_US) {
-                V.rawPending = false;
-                openLoop(V.rawStart, V.rawMask, now + 2 * FRAME_US);   // 2f on your stick, then → + punch
-                gp->state.buttons = (phys & ~ATTACK_MASK) | V.rawMask;   // your stick + the punch(es)
-                return true;
-            }
-            gp->state.buttons &= ~V.suppress;
-            return true;
-        }
-        if (V.win == W_HK && !V.chordPending && qcbRising) {
-            closeWindow(now);                     // st.HK + Macro 1 = jump cancel thunder dash
-            seqHKThunder(); startSeq(now, 0, 0);
+            V.suppress |= rising & ATTACK_MASK;   // never leak a press into the game mid-move
             if (runSeq(gp, now, rel)) return true;
-        }
-        if (V.win == W_LOOP && !V.playing && (rel & RB)) {
-            closeWindow(now);                     // back (← ↙ ↖) releases the seismo hold, nothing comes out
-        }
-        if (V.win == W_LOOP && !V.playing && superRising) {
-            closeWindow(now);                     // macro super cancels the loop hold
-            V.superCancel = true;
-        }
-        if (V.win != W_NONE) {
-            if (V.winGuard && now < V.guardUntil && (rising & ATTACK_MASK & ~V.seqTrigger)) {
-                closeWindow(now);                    // MP+MK parry, HP+HK impact, etc.
-            } else {
-                V.winGuard = V.winGuard && now < V.guardUntil;
-                uint32_t r = rising & ATTACK_MASK;
-                if (V.winGuard) r &= ~V.seqTrigger;
-                if (V.pendMask) r = 0;              // a loop cancel is already waiting
-                if (r && !V.chordPending) {
-                    V.chordPending = true; V.chordMask = 0; V.chordFirst = lowestBit(r); V.chordStart = now;
-                }
-                if (V.chordPending) {
-                    V.chordMask |= r;
-                    V.suppress |= r;
-                    bool ready = popcount32(V.chordMask) >= 2 || now - V.chordStart >= V_CHORD_WIN_US
-                                 || (V.win == W_LV2);
-                    if (ready) {
-                        uint32_t m = V.chordMask, f = V.chordFirst;
-                        V.chordPending = false;
-                        if (V.win == W_LOOP && loopSchedule(m, f, now)) {
-                            // waits for its time below (hold keeps going)
-                        } else if (V.win == W_MK && !((m & LP) && (m & LK)) &&
-                                   (m & KICK_MASK) && (!(m & PUNCH_MASK) || (f & KICK_MASK))) {
-                            // MK -> kick(s): burning kick starts 15f after the MK press (MK hold keeps going)
-                            uint32_t k = m & KICK_MASK;
-                            V.pendMask = popcount32(k) >= 2 ? (MK | HK) : k;
-                            V.pendKick = true;
-                            V.pendAt = V.mkStart + 15 * FRAME_US;
-                        } else if (V.win == W_HK && (m & ATTACK_MASK) == LK) {
-                            // st.HK -> LK: thunder (MP+HP) + Level 2 window, starts 12f after the HK press
-                            closeWindow(now);
-                            seqThunder(MP | HP);
-                            V.lv2Pending = true;
-                            uint64_t at = V.hkStart + 12 * FRAME_US;
-                            if (at > now) V.delayedAt = at;
-                            else { startSeq(now, 0, 0); V.seqTrigger = 0; if (runSeq(gp, now, rel)) return true; }
-                        } else if (V.win == W_HK && (m & ATTACK_MASK) == MK) {
-                            // st.HK -> MK: OD burning kick, kicks land 32f after the HK press
-                            closeWindow(now);
-                            seqBurn(MK | HK);
-                            uint64_t pre = 0;
-                            for (int i = 0; i < V.seqLen - 1; i++) pre += V.seq[i].dur;
-                            uint64_t at = V.hkStart + 32 * FRAME_US;
-                            at = (at > pre) ? at - pre : 0;
-                            if (at > now) V.delayedAt = at;
-                            else { startSeq(now, 0, 0); V.seqTrigger = 0; if (runSeq(gp, now, rel)) return true; }
-                        } else if (resolveWindow(m, f, false, now)) {
-                            V.seqTrigger = 0;
-                            if (runSeq(gp, now, rel)) return true;
-                        } else {
-                            V.suppress &= ~m;     // not a window input: let it through
-                        }
-                    }
-                } else if (ufRising && V.win == W_HK) {   // jump only after st.HK
-                    if (resolveWindow(0, 0, true, now) && runSeq(gp, now, rel)) return true;
-                }
-                if ((V.win == W_LOOP || V.win == W_MK) && V.pendMask && !V.playing && now >= V.pendAt) {
-                    uint32_t pm = V.pendMask; bool kick = V.pendKick; bool mk = (V.win == W_MK);
-                    closeWindow(now);
-                    if (mk) seqMKBurn(pm); else if (kick) seqBurn(pm); else seqLoopJC(pm);
-                    startSeq(now, 0, 0); V.seqTrigger = 0;
-                    if (runSeq(gp, now, rel)) return true;
-                }
-                if (V.win != W_NONE && !V.chordPending && !V.pendMask && now >= V.winDeadline) {
-                    closeWindow(now);
-                }
-            }
-        }
-
-        if (V.delayedAt && !V.playing && V.win == W_NONE) {
-            if (now >= V.delayedAt) {
-                V.delayedAt = 0;
-                startSeq(now, 0, 0); V.seqTrigger = 0;
-                if (runSeq(gp, now, rel)) return true;
-            }
         }
 
         // ---- new triggers (idle)
-        bool idle = V.win == W_NONE && !V.playing && !V.delayedAt && !otherMacroBusy && !locked && !(rel & RU);
+        bool idle = V.win == W_NONE && !V.playing && !otherMacroBusy && !(rel & RU);
         if (V.hpFireAt && now >= V.hpFireAt && !idle) V.hpFireAt = 0;   // something else is going on: drop the queued cancel
         if (idle) {
-            uint32_t r = rising;
-            bool canCancel = now >= V.noCancelUntil;
             if (V.hpFireAt && now >= V.hpFireAt) {          // the queued HP cancel starts now
                 bool crouch = V.hpCrouch;
                 V.hpFireAt = 0; V.hpAt = 0;
                 if (crouch) seqCrouchHP(); else seqStandHP();
                 startSeq(now, 0, 0);
                 V.isCrouchHP = crouch;
-                V.chpStart = now;
                 if (runSeq(gp, now, rel)) return true;
             } else if (lv1Rising) {                         // Macro 5 = qcf qcf, Macro 6 = qcb qcb (+ LK / HK), fixed on screen
                 seqLevel1Screen((lv1Rising & m5) ? +1 : -1);
                 startSeq(now, 0, 0);
                 if (runSeq(gp, now, rel)) return true;
-            } else if (V.burnout && (r & XBTN)) {
+            } else if (V.burnout && (rising & XBTN)) {
                 V.suppress |= XBTN;
                 seqLevel1(); startSeq(now, 0, 0);
                 if (runSeq(gp, now, rel)) return true;
-            } else if (!canCancel) {
-                // loop just ran out: everything goes to the game as a normal hit
-            } else if ((r & PUNCH_MASK) && detectSeismoMotion(now)) {
-                // you did a seismo yourself: hold the punch back up to 3f (catch OD), then the loop hold
-                V.rawPending = true; V.rawMask = r & PUNCH_MASK; V.rawStart = now;
-                V.suppress |= V.rawMask;
+            } else if ((rising & PUNCH_MASK) && detectSeismoMotion(now)) {
+                // you did a seismo yourself: the punch goes out as it is and the seismo window opens
+                V.win = W_SZ; V.winAt = now; V.winPick = 0;
+                V.hpAt = 0;
             } else if ((r & ATTACK_MASK) == HP && !(phys & ATTACK_MASK & ~HP)) {
-                if (cancelGuarded) {
-                    // protected press after a jump: a normal hit
-                } else if (V.hpAt && !V.hpFireAt && now - V.hpAt < (V.hpCrouch ? 12ULL : 18ULL) * FRAME_US) {
+                if (V.hpAt && !V.hpFireAt && now - V.hpAt < (V.hpCrouch ? 12ULL : 18ULL) * FRAME_US) {
                     // second HP inside the window: hidden. st.HP: the cancel starts right away. cr.HP: at a random
                     // frame 8-12 from the first HP (a late second press: between its own frame and frame 12)
                     V.suppress |= HP;
@@ -1093,34 +799,14 @@ namespace {
                     else V.hpAt = 0;
                 }
             } else if ((r & ATTACK_MASK) == MK && !(phys & ATTACK_MASK & ~MK)) {
-                V.win = W_MK; V.winDeadline = now + randomRange(V_WIN_MK_MIN, V_WIN_MK_MAX);
-                V.winGuard = true; V.seqTrigger = MK; V.guardUntil = now + V_CHORD_US;
-                V.mkDir = (rel & RD) ? D_ : N_; V.holdFrom = now; V.mkStart = now;
-            } else if ((r & ATTACK_MASK) == HK && !(phys & ATTACK_MASK & ~HK) && (rel == N_ || rel == B_)) {
-                V.win = W_HK; V.winDeadline = now + V_WIN_HK_US;
-                V.winGuard = true; V.seqTrigger = HK; V.guardUntil = now + V_CHORD_US;
-                V.hkStart = now;
+                V.win = W_MK; V.winAt = now; V.winPick = 0;   // your MK goes out as it is; 10f window
             }
-        }
-
-        // ---- hold output: MK held on N/↓ (MK window), → + punch (seismo loop)
-        if (!V.playing && V.win == W_LOOP && now < V.holdFrom) {
-            gp->state.buttons = (phys & ~(ATTACK_MASK | XBTN)) | V.loopPunch;   // your stick + the punch
-            return true;
-        }
-        if (!V.playing && (V.win == W_MK || V.win == W_LOOP) && now >= V.holdFrom) {
-            bool loop = (V.win == W_LOOP);
-            gp->state.dpad = toAbs(loop ? F_ : V.mkDir);
-            gp->state.buttons = (phys & ~(ATTACK_MASK | XBTN)) | (loop ? V.loopPunch : MK);
-            return true;
         }
 
         if (V.burnout) V.suppress |= (phys & XBTN);
         gp->state.buttons &= ~V.suppress;
         return false;
     }
-
-    bool viperLocked(uint64_t now) { return now < V.airUntil; }
 
     // ---------------- super spam (built-in profiles): the super comes out as usual; if its button
     // (Macro 3/4, or X in burnout) is still held when it ends, ↓ ↘ → + the same button repeats in the
@@ -2300,8 +1986,7 @@ void InputMacro::preprocess()
             // pin 20 held + Macro 1: next profile; pin 20 held + Macro 2: previous profile
             togglePinCombo = true;
             reset();
-            V.playing = false; V.win = W_NONE; V.chordPending = false; V.lv2Pending = false; V.delayedAt = 0; V.pendMask = 0;
-            V.suppress = 0; V.rawPending = false;
+            viperReset();
             gearPendingMacro = -1;
             spamReset();
             profileIdx = (profileIdx + (comboNext ? 1 : P_COUNT - 1)) % P_COUNT;
@@ -2313,7 +1998,7 @@ void InputMacro::preprocess()
             lilySpd = false; lilyOD = false;
             lukeHoldBtn = 0; lukeSuppress = 0; lukeTaken = false;
             g_sagatBurnout = false;
-            V.hpAt = 0; V.hpFireAt = 0; V.jumpGuard = JumpGuard(); chunGuard = JumpGuard(); lvl3Until = 0; manonHPAt = 0; arjinHKHold = false; arjinBlockUntil = 0; arjinPendUntil = 0; arjinPending = 0; arjinDownSwallow = false;
+            chunGuard = JumpGuard(); lvl3Until = 0; manonHPAt = 0; arjinHKHold = false; arjinBlockUntil = 0; arjinPendUntil = 0; arjinPending = 0; arjinDownSwallow = false;
             cgrab = false; pinkHKHold = false; pinkHoldAfter = false;
             for (int i = 0; i < MAX_MACRO_LIMIT; i++) gearMask[i] = 0;
             if (cammyActive) { gearMask[0] = LK; gearMask[1] = LK; }   // Cammy DP gear starts on LK
@@ -2323,7 +2008,7 @@ void InputMacro::preprocess()
             macrosOn = true;
             detectViperMode(inputMacroOptions);
             prevMacroInputPressed = true;    // the Macro 1 / Macro 2 press used for the switch never fires
-            V.prevQcbPins = 0xFFFFFFFFu; V.prevSuper = 0xFFFFFFFFu; V.prevQcb = true;   // nor counts as a qcb/super press
+            V.prevQcbPins = 0xFFFFFFFFu; V.prevLv1Pins = 0xFFFFFFFFu;   // nor counts as a qcb / Level 1 press
         }
         prevComboMacro1 = m1;
         prevComboMacro2 = m2;
@@ -2336,8 +2021,7 @@ void InputMacro::preprocess()
             macrosOn = !macrosOn;
             if (!macrosOn) {
                 reset();
-                V.playing = false; V.win = W_NONE; V.chordPending = false; V.lv2Pending = false; V.delayedAt = 0; V.pendMask = 0;
-                V.suppress = 0;
+                viperReset();
                 gearPendingMacro = -1;
             }
             g_viperActive = viperMode && macrosOn;
@@ -2394,12 +2078,10 @@ void InputMacro::preprocess()
     // CUSTOM: Viper engine (runs first, owns the output while a Viper move plays)
     if (viperMode) {
         if (viperProcess(gamepad, now, macroPinMasks[4], macroPinMasks[5], turboPinMask,
-                         (uint32_t)(macroPinMasks[2] | macroPinMasks[3]), (uint32_t)macroPinMasks[0],
                          (uint32_t)(macroPinMasks[0] | macroPinMasks[1]), isMacroRunning)) {
             prevMacroInputPressed = true;   // don't start a regular macro under it
             return;
         }
-        if (V.superCancel) { V.superCancel = false; prevMacroInputPressed = false; }   // super fires now
     }
     if (pinkActive || arjinActive) {
         if (pinkProcess(gamepad, now, macroPinMasks[0], macroPinMasks[1], macroPinMasks[2], macroPinMasks[3],
@@ -2453,13 +2135,6 @@ void InputMacro::preprocess()
     }
 
     checkMacroPress();
-    // no macros in the air: a macro button pressed during the jump lock is thrown away
-    // and stays dead until you let go of it (it never fires on landing)
-    if (viperMode && !isMacroRunning) {
-        if (pressedMacro < 0) airSwallow = false;
-        else if (viperLocked(now)) airSwallow = true;
-        if (airSwallow) { pressedMacro = -1; prevMacroInputPressed = true; }
-    }
 
     gearSwallow &= gamepad->state.buttons;
     gamepad->state.buttons &= ~gearSwallow;
