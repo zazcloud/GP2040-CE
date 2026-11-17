@@ -591,8 +591,19 @@ namespace {
         vPush(U_, btn, F10(30), seismo ? FL_SEISMO : 0);
     }
     void seqSeismo(uint32_t punches) { seqCancel(punches, true); }
+    // Burning kick (fixed, from the player's input history): ↓ 4f, ↘ 3f, → 2f, ↗ 3f, → + kick 1f, N + kick 4f
+    void seqBurnKick(uint32_t kick) {
+        vClear();
+        vPush(D_, 0, F10(40));
+        vPush(DF, 0, F10(30));
+        vPush(F_, 0, F10(20));
+        vPush(UF, 0, F10(30));
+        vPush(F_, kick, F10(10));
+        vPush(N_, kick, F10(40));
+        V.burnSeq = true;
+    }
     void seqMKSeismo(uint32_t punches) { seqCancel(punches, true); }
-    void seqMKBurn(uint32_t kick) { seqCancel(kick, false); V.burnSeq = true; }
+    void seqMKBurn(uint32_t kick) { seqBurnKick(kick); }
     void seqSeismoFeint() {                     // ... then ↗ + LP 3-4f, LK joins for 3-4f; LP lets go with it or 1-2f earlier
         seismoMotion();
         vPush(UF, LP, randomRange(F10(30), F10(40)));
@@ -601,7 +612,7 @@ namespace {
         vPush(UF, LP | LK, kick - early);
         if (early) vPush(UF, LK, early);
     }
-    void seqBurn(uint32_t kick) { seqCancel(kick, false); V.burnSeq = true; }
+    void seqBurn(uint32_t kick) { seqBurnKick(kick); }
     void seqStandHP() {                         // after your st.HP / MK + LP: jump cancel -> thunder dash feint
         vClear();
         seqArrows({D_, DB, B_}, 12, 20);                             // fast arrows 1.2-2f
