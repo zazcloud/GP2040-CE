@@ -472,6 +472,8 @@ namespace {
         uint64_t winAt = 0;           // the MK press / the seismo punch press
         uint64_t winLen = 0;          // MK window: 10f standing, 12f crouching
         uint32_t winPick = 0;
+        bool burnSeq = false;         // the sequence playing is a burning kick
+        uint64_t burnLockUntil = 0;   // 70f after a burning kick: only Macro 1-6 work
 
         uint32_t suppress = 0;        // attack bits hidden from the game until released
         uint32_t prevButtons = 0;
@@ -570,7 +572,7 @@ namespace {
     void seqArrows(std::initializer_list<uint8_t> dirs, uint32_t lo10, uint32_t hi10) {
         for (uint8_t d : dirs) vPush(d, 0, randomRange(F10(lo10), F10(hi10)));
     }
-    // jump cancel motion of the seismo: ↓ 3-5f, ↘ 2.4-3f, → 3-5f, ↗ 3-5f
+    // motion of the seismo feint: ↓ 3-5f, ↘ 2.4-3f, → 3-5f, ↗ 3-5f
     void seismoMotion() {
         vClear();
         vPush(D_, 0, randomRange(F10(30), F10(50)));
@@ -578,23 +580,20 @@ namespace {
         vPush(F_, 0, randomRange(F10(30), F10(50)));
         vPush(UF, 0, randomRange(F10(30), F10(50)));
     }
-    void seqSeismo(uint32_t punches) {          // ... then ↗ + punch 3-5f (opens the seismo window)
-        seismoMotion();
-        vPush(UF, punches, randomRange(F10(30), F10(50)), FL_SEISMO);
-    }
-    void seqMKSeismo(uint32_t punches) {        // after MK (fixed, no randomness): ↓ 5f, ↘ 3f, → 2f, ↑ 5f, ↗ + punch 2f, ↑ + punch 1f
+    // Cancel motion for the seismo and the burning kick (fixed, no randomness):
+    // ↓ 3f, ↘ 2f, → 2f, ↗ 2f, ↑ 3f, then N + the button 3f (a seismo opens its 20f window there)
+    void seqCancel(uint32_t btn, bool seismo) {
         vClear();
-        vPush(D_, 0, F10(50));
-        vPush(DF, 0, F10(30));
+        vPush(D_, 0, F10(30));
+        vPush(DF, 0, F10(20));
         vPush(F_, 0, F10(20));
-        vPush(U_, 0, F10(50));
-        vPush(UF, punches, F10(20), FL_SEISMO);
-        vPush(U_, punches, F10(10));
+        vPush(UF, 0, F10(20));
+        vPush(U_, 0, F10(30));
+        vPush(N_, btn, F10(30), seismo ? FL_SEISMO : 0);
     }
-    void seqMKBurn(uint32_t kick) {            // after MK: burning kick on the seismo motion, then ↗ + kick 3-5f
-        seismoMotion();
-        vPush(UF, kick, randomRange(F10(30), F10(50)));
-    }
+    void seqSeismo(uint32_t punches) { seqCancel(punches, true); }
+    void seqMKSeismo(uint32_t punches) { seqCancel(punches, true); }
+    void seqMKBurn(uint32_t kick) { seqCancel(kick, false); V.burnSeq = true; }
     void seqSeismoFeint() {                     // ... then ↗ + LP 3-4f, LK joins for 3-4f; LP lets go with it or 1-2f earlier
         seismoMotion();
         vPush(UF, LP, randomRange(F10(30), F10(40)));
@@ -603,15 +602,7 @@ namespace {
         vPush(UF, LP | LK, kick - early);
         if (early) vPush(UF, LK, early);
     }
-    void seqBurn(uint32_t kick) {               // burning kick (fixed, no randomness): ↓ 5f, ↘ 3f, → 2f, ↑ 5f, ↗ + kick 2f, ↑ + kick 1f
-        vClear();
-        vPush(D_, 0, F10(50));
-        vPush(DF, 0, F10(30));
-        vPush(F_, 0, F10(20));
-        vPush(U_, 0, F10(50));
-        vPush(UF, kick, F10(20));
-        vPush(U_, kick, F10(10));
-    }
+    void seqBurn(uint32_t kick) { seqCancel(kick, false); V.burnSeq = true; }
     void seqStandHP() {                         // after your st.HP / MK + LP: jump cancel -> thunder dash feint
         vClear();
         seqArrows({D_, DB, B_}, 12, 20);                             // fast arrows 1.2-2f
@@ -655,7 +646,9 @@ namespace {
 
     void startSeq(uint64_t now, uint32_t trigger, uint64_t guardUs) {
         (void)trigger; (void)guardUs;
+        bool burn = V.burnSeq;            // set by seqBurn / seqMKBurn just before
         V.playing = V.seqLen > 0;
+        V.burnSeq = burn && V.playing;
         V.isCrouchHP = false;
         V.seqPos = 0;
         V.stepStart = now;
@@ -677,7 +670,12 @@ namespace {
             if (now - V.stepStart < st.dur) break;
             V.stepStart += st.dur;
             V.seqPos++;
-            if (V.seqPos >= V.seqLen) { V.playing = false; return false; }
+            if (V.seqPos >= V.seqLen) {
+                V.playing = false;
+                if (V.burnSeq) V.burnLockUntil = V.stepStart + 70ULL * FRAME_US;   // the burning kick is over
+                V.burnSeq = false;
+                return false;
+            }
             if (V.seq[V.seqPos].flags & FL_SEISMO) {    // the seismo punch comes out now: its 20f window opens
                 V.win = W_SZ; V.winAt = V.stepStart; V.winPick = 0;
             }
@@ -699,6 +697,7 @@ namespace {
     //  a window's cancel starts when the window ends, even if you pressed earlier (the seismo window's burning kick: frame 18)
     //  Macro 5 / 6 = Level 1 (fixed on screen); burnout (turbo button): X = Level 1
     //  jump protection: 43f after you press up, the first HP / MK press starts nothing (once per jump)
+    //  after a burning kick: 70f where only Macro 1-6 work (no cancels, no windows, X is a plain X)
     constexpr uint64_t V_WIN_MK_US = 10ULL * FRAME_US;
     constexpr uint64_t V_WIN_SZ_US = 20ULL * FRAME_US;
     uint32_t pickOne(uint32_t m) {               // one button out of a press: LP, MP, HP, LK, MK, HK in that order
@@ -708,6 +707,7 @@ namespace {
     void viperReset() {
         V.playing = false; V.win = W_NONE; V.winPick = 0; V.suppress = 0;
         V.hpAt = 0; V.hpFireAt = 0; V.jumpGuard = JumpGuard();
+        V.burnSeq = false; V.burnLockUntil = 0;
     }
     // Returns true when the Viper engine owns the output this poll.
     bool viperProcess(Gamepad* gp, uint64_t now, uint32_t m5, uint32_t m6, uint32_t burnPin, uint32_t qcbPins, bool otherMacroBusy) {
@@ -777,9 +777,12 @@ namespace {
 
         // ---- new triggers (idle)
         bool idle = V.win == W_NONE && !V.playing && !otherMacroBusy && !(rel & RU);
+        bool burnLock = now < V.burnLockUntil;    // 70f after a burning kick: only Macro 1-6
         if (V.hpFireAt && now >= V.hpFireAt && !idle) V.hpFireAt = 0;   // something else is going on: drop the queued cancel
         if (idle) {
-            if (V.hpFireAt && now >= V.hpFireAt) {          // the queued HP cancel starts now
+            if (burnLock && !lv1Rising) {
+                V.hpAt = 0; V.hpFireAt = 0;       // nothing arms or fires; your presses are plain hits
+            } else if (V.hpFireAt && now >= V.hpFireAt) {          // the queued HP cancel starts now
                 bool crouch = V.hpCrouch;
                 V.hpFireAt = 0; V.hpAt = 0;
                 if (crouch) seqCrouchHP(); else seqStandHP();
@@ -822,7 +825,7 @@ namespace {
             }
         }
 
-        if (V.burnout) V.suppress |= (phys & XBTN);
+        if (V.burnout && now >= V.burnLockUntil) V.suppress |= (phys & XBTN);
         gp->state.buttons &= ~V.suppress;
         return false;
     }
