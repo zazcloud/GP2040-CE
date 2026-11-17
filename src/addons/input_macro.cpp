@@ -581,7 +581,7 @@ namespace {
         vPush(UF, 0, randomRange(F10(30), F10(50)));
     }
     // Cancel motion for the seismo and the burning kick (fixed, no randomness):
-    // ↓ 3f, ↘ 2f, → 2f, ↗ 2f, ↑ 3f, then N + the button 3f (a seismo opens its 20f window there)
+    // ↓ 3f, ↘ 2f, → 2f, ↗ 2f, ↑ 3f, then ↑ + the button 3f (a seismo opens its 20f window there)
     void seqCancel(uint32_t btn, bool seismo) {
         vClear();
         vPush(D_, 0, F10(30));
@@ -589,7 +589,7 @@ namespace {
         vPush(F_, 0, F10(20));
         vPush(UF, 0, F10(20));
         vPush(U_, 0, F10(30));
-        vPush(N_, btn, F10(30), seismo ? FL_SEISMO : 0);
+        vPush(U_, btn, F10(30), seismo ? FL_SEISMO : 0);
     }
     void seqSeismo(uint32_t punches) { seqCancel(punches, true); }
     void seqMKSeismo(uint32_t punches) { seqCancel(punches, true); }
