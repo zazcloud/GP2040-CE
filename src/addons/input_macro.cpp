@@ -582,6 +582,15 @@ namespace {
         seismoMotion();
         vPush(UF, punches, randomRange(F10(30), F10(50)), FL_SEISMO);
     }
+    void seqMKSeismo(uint32_t punches) {        // after MK (fixed, no randomness): ↓ 5f, ↘ 3f, → 2f, ↑ 5f, ↗ + punch 2f, ↑ + punch 1f
+        vClear();
+        vPush(D_, 0, F10(50));
+        vPush(DF, 0, F10(30));
+        vPush(F_, 0, F10(20));
+        vPush(U_, 0, F10(50));
+        vPush(UF, punches, F10(20), FL_SEISMO);
+        vPush(U_, punches, F10(10));
+    }
     void seqMKBurn(uint32_t kick) {            // after MK: burning kick on the seismo motion, then ↗ + kick 3-5f
         seismoMotion();
         vPush(UF, kick, randomRange(F10(30), F10(50)));
@@ -687,7 +696,7 @@ namespace {
     //  MK (standing or crouching): your own hit; 10f window: MP = seismo, LP = the st.HP feint, HP = OD seismo (LP+MP),
     //    a kick = burning kick of that kick on the seismo motion
     //  any seismo (yours or a macro's): 20f window: LP = seismo feint, MP / HP = seismo, LK / MK / HK = burning kick
-    //  a window's cancel starts when the window ends, even if you pressed earlier
+    //  a window's cancel starts when the window ends, even if you pressed earlier (the seismo window's burning kick: frame 18)
     //  Macro 5 / 6 = Level 1 (fixed on screen); burnout (turbo button): X = Level 1
     //  jump protection: 43f after you press up, the first HP / MK press starts nothing (once per jump)
     constexpr uint64_t V_WIN_MK_US = 10ULL * FRAME_US;
@@ -736,13 +745,15 @@ namespace {
             uint32_t want = rising & ATTACK_MASK;
             if (want && !V.winPick) V.winPick = pickOne(want);
             V.suppress |= want;                   // window presses never reach the game
-            if (now >= V.winAt + (V.win == W_MK ? V.winLen : V_WIN_SZ_US)) {
+            // the seismo window's burning kick starts on frame 18 (a kick pressed later: right away); the rest at the window's end
+            bool kickEarly = V.win == W_SZ && (V.winPick & KICK_MASK) && now >= V.winAt + 18ULL * FRAME_US;
+            if (kickEarly || now >= V.winAt + (V.win == W_MK ? V.winLen : V_WIN_SZ_US)) {
                 VWin w = V.win; uint32_t b = V.winPick;
                 V.win = W_NONE; V.winPick = 0;
                 if (b && !V.playing && !otherMacroBusy) {
                     if (w == W_MK) {
                         if (b & KICK_MASK) seqMKBurn(b);
-                        else if (b == LP) seqStandHP(); else seqSeismo(b == HP ? (LP | MP) : MP);
+                        else if (b == LP) seqStandHP(); else seqMKSeismo(b == HP ? (LP | MP) : MP);
                     } else {
                         if (b == LP) seqSeismoFeint();
                         else if (b & PUNCH_MASK) seqSeismo(b);
