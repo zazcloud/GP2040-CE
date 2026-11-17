@@ -261,6 +261,7 @@ namespace {
         g_pinkOpts.macroList[2] = g_sagatOpts.macroList[3];
         g_pinkOpts.macroList[3] = g_sagatOpts.macroList[2];
     }
+    bool burnSwallow = false;   // Viper: macro button pressed during the 70f after a burning kick
     uint32_t gearSwallow = 0;
     bool superLight = false;        // this super ends with the light (true) or heavy button
     uint32_t turboPinMask = 0;
@@ -473,7 +474,7 @@ namespace {
         uint64_t winLen = 0;          // MK window: 10f standing, 12f crouching
         uint32_t winPick = 0;
         bool burnSeq = false;         // the sequence playing is a burning kick
-        uint64_t burnLockUntil = 0;   // 70f after a burning kick: only Macro 1-6 work
+        uint64_t burnLockUntil = 0;   // 70f after a burning kick: the macro buttons (1-6) are off
 
         uint32_t suppress = 0;        // attack bits hidden from the game until released
         uint32_t prevButtons = 0;
@@ -591,15 +592,14 @@ namespace {
         vPush(U_, btn, F10(30), seismo ? FL_SEISMO : 0);
     }
     void seqSeismo(uint32_t punches) { seqCancel(punches, true); }
-    // Burning kick (fixed): ↓ 5f, ↘ 4f, → 2f, ↗ 4f, → + kick 1f, N + kick 4f
+    // Burning kick (fixed): ↓ 5f, ↘ 4f, → 2f, ↗ 4f, N + kick 5f
     void seqBurnKick(uint32_t kick) {
         vClear();
         vPush(D_, 0, F10(50));
         vPush(DF, 0, F10(40));
         vPush(F_, 0, F10(20));
         vPush(UF, 0, F10(40));
-        vPush(F_, kick, F10(10));
-        vPush(N_, kick, F10(40));
+        vPush(N_, kick, F10(50));
         V.burnSeq = true;
     }
     void seqMKSeismo(uint32_t punches) { seqCancel(punches, true); }
@@ -707,7 +707,7 @@ namespace {
     //  a window's cancel starts when the window ends, even if you pressed earlier (the seismo window's burning kick: always 19f after the punch)
     //  Macro 5 / 6 = Level 1 (fixed on screen); burnout (turbo button): X = Level 1
     //  jump protection: 43f after you press up, the first HP / MK press starts nothing (once per jump)
-    //  after a burning kick: 70f where only Macro 1-6 work (no cancels, no windows, X is a plain X)
+    //  after a burning kick: 70f where the macro buttons (Macro 1-6) do nothing; a press stays dead until released
     constexpr uint64_t V_WIN_MK_US = 10ULL * FRAME_US;
     constexpr uint64_t V_WIN_SZ_US = 20ULL * FRAME_US;
     uint32_t pickOne(uint32_t m) {               // one button out of a press: LP, MP, HP, LK, MK, HK in that order
@@ -731,6 +731,7 @@ namespace {
         V.prevBurn = bo;
         uint32_t lv1Now = (uint32_t)(pins & (m5 | m6));
         uint32_t lv1Rising = lv1Now & ~V.prevLv1Pins;   // Macro 5 / 6: Level 1, fixed on screen
+        if (now < V.burnLockUntil) lv1Rising = 0;       // 70f after a burning kick: macro buttons are off
         V.prevLv1Pins = lv1Now;
 
         uint32_t phys = gp->state.buttons;
@@ -791,12 +792,9 @@ namespace {
 
         // ---- new triggers (idle)
         bool idle = V.win == W_NONE && !V.playing && !otherMacroBusy && !(rel & RU);
-        bool burnLock = now < V.burnLockUntil;    // 70f after a burning kick: only Macro 1-6
         if (V.hpFireAt && now >= V.hpFireAt && !idle) V.hpFireAt = 0;   // something else is going on: drop the queued cancel
         if (idle) {
-            if (burnLock && !lv1Rising) {
-                V.hpAt = 0; V.hpFireAt = 0;       // nothing arms or fires; your presses are plain hits
-            } else if (V.hpFireAt && now >= V.hpFireAt) {          // the queued HP cancel starts now
+            if (V.hpFireAt && now >= V.hpFireAt) {          // the queued HP cancel starts now
                 bool crouch = V.hpCrouch;
                 V.hpFireAt = 0; V.hpAt = 0;
                 if (crouch) seqCrouchHP(); else seqStandHP();
@@ -839,7 +837,7 @@ namespace {
             }
         }
 
-        if (V.burnout && now >= V.burnLockUntil) V.suppress |= (phys & XBTN);
+        if (V.burnout) V.suppress |= (phys & XBTN);
         gp->state.buttons &= ~V.suppress;
         return false;
     }
@@ -2171,6 +2169,12 @@ void InputMacro::preprocess()
     }
 
     checkMacroPress();
+    // CUSTOM: Viper, 70f after a burning kick: a macro button pressed then does nothing and stays dead until released
+    if (viperMode && !isMacroRunning) {
+        if (pressedMacro < 0) burnSwallow = false;
+        else if (now < V.burnLockUntil) burnSwallow = true;
+        if (burnSwallow) { pressedMacro = -1; prevMacroInputPressed = true; }
+    }
 
     gearSwallow &= gamepad->state.buttons;
     gamepad->state.buttons &= ~gearSwallow;
