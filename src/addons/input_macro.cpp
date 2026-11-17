@@ -569,17 +569,21 @@ namespace {
     void seqArrows(std::initializer_list<uint8_t> dirs, uint32_t lo10, uint32_t hi10) {
         for (uint8_t d : dirs) vPush(d, 0, randomRange(F10(lo10), F10(hi10)));
     }
-    // jump cancel motion of the seismo: ↓ 1.5-2.5f, ↘ 1.2-1.5f, → 1.5-2.5f, ↗ 1.5-2.5f
+    // jump cancel motion of the seismo: ↓ 3-5f, ↘ 2.4-3f, → 3-5f, ↗ 3-5f
     void seismoMotion() {
         vClear();
-        vPush(D_, 0, randomRange(F10(15), F10(25)));
-        vPush(DF, 0, randomRange(F10(12), F10(15)));
-        vPush(F_, 0, randomRange(F10(15), F10(25)));
-        vPush(UF, 0, randomRange(F10(15), F10(25)));
+        vPush(D_, 0, randomRange(F10(30), F10(50)));
+        vPush(DF, 0, randomRange(F10(24), F10(30)));
+        vPush(F_, 0, randomRange(F10(30), F10(50)));
+        vPush(UF, 0, randomRange(F10(30), F10(50)));
     }
     void seqSeismo(uint32_t punches) {          // ... then ↗ + punch 3-5f (opens the seismo window)
         seismoMotion();
         vPush(UF, punches, randomRange(F10(30), F10(50)), FL_SEISMO);
+    }
+    void seqMKBurn(uint32_t kick) {            // after MK: burning kick on the seismo motion, then ↗ + kick 3-5f
+        seismoMotion();
+        vPush(UF, kick, randomRange(F10(30), F10(50)));
     }
     void seqSeismoFeint() {                     // ... then ↗ + LP 3-4f, LK joins for 3-4f; LP lets go with it or 1-2f earlier
         seismoMotion();
@@ -679,7 +683,8 @@ namespace {
 
     // ---------------------------------------------------------- Viper engine
     //  HP (standing / walking, or crouching): your own hit; HP again inside 18f (crouch 12f) = the thunder feint cancel
-    //  MK (standing or crouching): your own hit; 10f window: MP = seismo, LP = the st.HP feint, HP = OD seismo (LP+MP)
+    //  MK (standing or crouching): your own hit; 10f window: MP = seismo, LP = the st.HP feint, HP = OD seismo (LP+MP),
+    //    a kick = burning kick of that kick on the seismo motion
     //  any seismo (yours or a macro's): 20f window: LP = seismo feint, MP / HP = seismo, LK / MK / HK = burning kick
     //  a window's cancel starts when the window ends, even if you pressed earlier
     //  Macro 5 / 6 = Level 1 (fixed on screen); burnout (turbo button): X = Level 1
@@ -727,7 +732,7 @@ namespace {
 
         // ---- open window: remember the first button, start its cancel when the window ends
         if (V.win != W_NONE) {
-            uint32_t want = rising & (V.win == W_MK ? PUNCH_MASK : ATTACK_MASK);
+            uint32_t want = rising & ATTACK_MASK;
             if (want && !V.winPick) V.winPick = pickOne(want);
             V.suppress |= want;                   // window presses never reach the game
             if (now >= V.winAt + (V.win == W_MK ? V_WIN_MK_US : V_WIN_SZ_US)) {
@@ -735,7 +740,8 @@ namespace {
                 V.win = W_NONE; V.winPick = 0;
                 if (b && !V.playing && !otherMacroBusy) {
                     if (w == W_MK) {
-                        if (b == LP) seqStandHP(); else seqSeismo(b == HP ? (LP | MP) : MP);
+                        if (b & KICK_MASK) seqMKBurn(b);
+                        else if (b == LP) seqStandHP(); else seqSeismo(b == HP ? (LP | MP) : MP);
                     } else {
                         if (b == LP) seqSeismoFeint();
                         else if (b & PUNCH_MASK) seqSeismo(b);
