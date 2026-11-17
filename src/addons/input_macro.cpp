@@ -449,6 +449,11 @@ namespace {
         bool lv2Pending = false;      // open Level 2 window when sequence ends
         bool isCrouchHP = false;      // X can cancel this one
         uint64_t chpStart = 0;
+        // HP cancels, Chun-Li style: your first HP goes out as it is; a second HP inside the window is hidden
+        // and starts the cancel (st.HP: within 18f -> frame 18-23; cr.HP: within 12f -> frame 8-12)
+        uint64_t hpAt = 0, hpFireAt = 0;
+        bool hpCrouch = false;
+        uint32_t prevLv1Pins = 0;     // Macro 5 / 6 (Level 1)
 
         VWin win = W_NONE;
         uint64_t winDeadline = 0;
@@ -489,7 +494,7 @@ namespace {
         uint32_t rawMask = 0;
         uint64_t rawStart = 0;
 
-        bool prevSwitch = false, prevBurn = false;
+        bool prevBurn = false;
 
         // direction history (relative codes)
         uint8_t  hCode[16];
@@ -614,18 +619,17 @@ namespace {
         vPush(UB, punches, randomRange(F10(15), F10(25)));
         vPush(coin() ? B_ : UB, punches, vBtn());
     }
-    void seqStandHP() {                         // st.HP -> jump cancel -> thunder dash feint
+    void seqStandHP() {                         // after your st.HP: jump cancel -> thunder dash feint
         vClear();
-        vPush(N_, HP, randomRange(F10(50), F10(70)));
         addArrows({D_, DB, B_});
         vPush(UB, HP, randomRange(F10(40), F10(70)));
         uint8_t d6 = coin() ? B_ : UB;
         vPush(d6, HP | LK, randomRange(F10(120), F10(160)));
         vPush(coin() ? d6 : N_, LK, randomRange(F10(10), F10(30)));  // kick only, arrow 50/50
     }
-    void seqCrouchHP() {                        // cr.HP -> thunder dash feint
+    void seqCrouchHP() {                        // after your cr.HP: thunder dash feint
         vClear();
-        vPush(D_, HP, randomRange(F10(40), F10(70)), FL_ABORT_FWD);
+        vPush(D_, 0, randomRange(F10(12), F10(20)));          // the ↓ that used to come with the ↓ + HP step
         vPush(DB, 0, randomRange(F10(12), F10(20)));
         vPush(B_, 0, randomRange(F10(50), F10(70)));
         uint32_t s4 = randomRange(F10(15), F10(25));
@@ -682,6 +686,12 @@ namespace {
     }
     void seqLevel1() { superArrowsAndFinish({D_, DF, F_, D_, DF}, F_, coin() ? LK : HK); }
     void seqLevel2() { superArrowsAndFinish({D_, DB, B_, D_, DB}, B_, coin() ? LP : HP); }
+    // Level 1 fixed on screen (Macro 5 / 6, like Aki): h = +1 -> ↓ ↘ → ↓ ↘ →, h = -1 -> ↓ ↙ ← ↓ ↙ ←, + LK / HK
+    void seqLevel1Screen(int h) {
+        bool fwd = (h > 0) == V.facingRight;
+        uint8_t dg = fwd ? DF : DB, hz = fwd ? F_ : B_;
+        superArrowsAndFinish({D_, dg, hz, D_, dg}, hz, coin() ? LK : HK);
+    }
 
     void startSeq(uint64_t now, uint32_t trigger, uint64_t guardUs) {
         V.playing = V.seqLen > 0;
@@ -823,7 +833,7 @@ namespace {
     }
 
     // Returns true when the Viper engine owns the output this poll.
-    bool viperProcess(Gamepad* gp, uint64_t now, uint32_t switchPin, uint32_t burnPin, uint32_t superPins, uint32_t qcbPin, uint32_t qcbPins, bool otherMacroBusy) {
+    bool viperProcess(Gamepad* gp, uint64_t now, uint32_t m5, uint32_t m6, uint32_t burnPin, uint32_t superPins, uint32_t qcbPin, uint32_t qcbPins, bool otherMacroBusy) {
         Mask_t pins = gp->debouncedGpio;
         uint32_t qcbAll = (uint32_t)(pins & qcbPins);
         if (qcbAll & ~V.prevQcbPins) V.qcbBlockUntil = now + 57ULL * FRAME_US;   // qcb pressed
@@ -835,12 +845,13 @@ namespace {
         uint32_t superRising = superNow & ~V.prevSuper;
         V.prevSuper = superNow;
 
-        // ---- side / burnout toggles (Macro 5 / Macro 6 buttons)
-        bool sw = switchPin && (pins & switchPin);
+        // ---- burnout toggle (turbo button, like the other profiles); the side is automatic (down-diagonal held 10f)
         bool bo = burnPin && (pins & burnPin);
-        if (sw && !V.prevSwitch) { V.facingRight = !V.facingRight; g_viperFacingRight = V.facingRight; }
         if (bo && !V.prevBurn)   { V.burnout = !V.burnout; g_viperBurnout = V.burnout; }
-        V.prevSwitch = sw; V.prevBurn = bo;
+        V.prevBurn = bo;
+        uint32_t lv1Now = (uint32_t)(pins & (m5 | m6));
+        uint32_t lv1Rising = lv1Now & ~V.prevLv1Pins;   // Macro 5 / 6: Level 1, fixed on screen
+        V.prevLv1Pins = lv1Now;
 
         uint32_t phys = gp->state.buttons;
         uint8_t rel = toRel(gp->state.dpad);
@@ -856,12 +867,6 @@ namespace {
         V.suppress &= phys;                       // released buttons are no longer hidden
 
         // ---- a sequence is playing
-        if (V.playing && V.isCrouchHP && (rising & PUNCH_MASK) && now - V.chpStart < V_CHP_PUNCH_US) {
-            // punch early in cr.HP: stop it and do a plain seismo (two punches = OD)
-            V.playing = false;
-            V.win = W_CHP; V.winDeadline = now + V_CHORD_WIN_US; V.winGuard = false;
-            V.chordPending = true; V.chordMask = 0; V.chordFirst = lowestBit(rising & PUNCH_MASK); V.chordStart = now;
-        }
         if (V.playing && V.isCrouchHP && (rising & XBTN)) {
             // X cancels cr.HP: Level 1 in burnout, otherwise X goes to the game
             V.playing = false;
@@ -1023,10 +1028,24 @@ namespace {
         }
 
         // ---- new triggers (idle)
-        if (V.win == W_NONE && !V.playing && !V.delayedAt && !otherMacroBusy && !locked && !(rel & RU)) {
+        bool idle = V.win == W_NONE && !V.playing && !V.delayedAt && !otherMacroBusy && !locked && !(rel & RU);
+        if (V.hpFireAt && now >= V.hpFireAt && !idle) V.hpFireAt = 0;   // something else is going on: drop the queued cancel
+        if (idle) {
             uint32_t r = rising;
             bool canCancel = now >= V.noCancelUntil;
-            if (V.burnout && (r & XBTN)) {
+            if (V.hpFireAt && now >= V.hpFireAt) {          // the queued HP cancel starts now
+                bool crouch = V.hpCrouch;
+                V.hpFireAt = 0; V.hpAt = 0;
+                if (crouch) seqCrouchHP(); else seqStandHP();
+                startSeq(now, 0, 0);
+                V.isCrouchHP = crouch;
+                V.chpStart = now;
+                if (runSeq(gp, now, rel)) return true;
+            } else if (lv1Rising) {                         // Macro 5 = qcf qcf, Macro 6 = qcb qcb (+ LK / HK), fixed on screen
+                seqLevel1Screen((lv1Rising & m5) ? +1 : -1);
+                startSeq(now, 0, 0);
+                if (runSeq(gp, now, rel)) return true;
+            } else if (V.burnout && (r & XBTN)) {
                 V.suppress |= XBTN;
                 seqLevel1(); startSeq(now, 0, 0);
                 if (runSeq(gp, now, rel)) return true;
@@ -1037,20 +1056,20 @@ namespace {
                 V.rawPending = true; V.rawMask = r & PUNCH_MASK; V.rawStart = now;
                 V.suppress |= V.rawMask;
             } else if ((r & ATTACK_MASK) == HP && !(phys & ATTACK_MASK & ~HP)) {
-                if (rel & RD) {
-                    seqCrouchHP();
-                } else if (!recentDown(now) && now >= V.qcbBlockUntil) {
-                    seqStandHP();
-                } else {
-                    V.seqLen = 0;               // HP right after a motion = special move, leave it
-                }
-                if (V.seqLen > 0) {
-                    bool crouch = (rel & RD) != 0;
+                if (V.hpAt && !V.hpFireAt && now - V.hpAt < (V.hpCrouch ? 12ULL : 18ULL) * FRAME_US) {
+                    // second HP inside the window: hidden, the cancel starts at a random frame of its range
+                    // (a late second press: between its own frame and the end of the range)
                     V.suppress |= HP;
-                    startSeq(now, HP, 0);               // nothing stops st.HP; cr.HP rules are above
-                    V.isCrouchHP = crouch;
-                    V.chpStart = now;
-                    if (runSeq(gp, now, rel)) return true;
+                    uint64_t lo = V.hpAt + (V.hpCrouch ? 7ULL : 17ULL) * FRAME_US;    // frame 8 / 18
+                    uint64_t hi = V.hpAt + (V.hpCrouch ? 11ULL : 22ULL) * FRAME_US;   // frame 12 / 23
+                    if (lo < now) lo = now;
+                    V.hpFireAt = (hi > lo) ? lo + randomRange(0, (uint32_t)(hi - lo)) : now;
+                } else if (!V.hpFireAt) {
+                    // first HP: your own hit. Crouching (↓ or a down-diagonal), or standing / walking; an HP right
+                    // after a motion or a qcb macro is a special move and arms nothing
+                    bool crouch = (rel & RD) != 0;
+                    if (crouch || (!recentDown(now) && now >= V.qcbBlockUntil)) { V.hpAt = now; V.hpCrouch = crouch; }
+                    else V.hpAt = 0;
                 }
             } else if ((r & ATTACK_MASK) == MK && !(phys & ATTACK_MASK & ~MK)) {
                 V.win = W_MK; V.winDeadline = now + randomRange(V_WIN_MK_MIN, V_WIN_MK_MAX);
@@ -2263,7 +2282,7 @@ void InputMacro::preprocess()
             lilySpd = false; lilyOD = false;
             lukeHoldBtn = 0; lukeSuppress = 0; lukeTaken = false;
             g_sagatBurnout = false;
-            lvl3Until = 0; manonHPAt = 0; arjinHKHold = false; arjinBlockUntil = 0; arjinPendUntil = 0; arjinPending = 0; arjinDownSwallow = false;
+            V.hpAt = 0; V.hpFireAt = 0; lvl3Until = 0; manonHPAt = 0; arjinHKHold = false; arjinBlockUntil = 0; arjinPendUntil = 0; arjinPending = 0; arjinDownSwallow = false;
             cgrab = false; pinkHKHold = false; pinkHoldAfter = false;
             for (int i = 0; i < MAX_MACRO_LIMIT; i++) gearMask[i] = 0;
             if (cammyActive) { gearMask[0] = LK; gearMask[1] = LK; }   // Cammy DP gear starts on LK
@@ -2343,7 +2362,7 @@ void InputMacro::preprocess()
 
     // CUSTOM: Viper engine (runs first, owns the output while a Viper move plays)
     if (viperMode) {
-        if (viperProcess(gamepad, now, macroPinMasks[4], macroPinMasks[5],
+        if (viperProcess(gamepad, now, macroPinMasks[4], macroPinMasks[5], turboPinMask,
                          (uint32_t)(macroPinMasks[2] | macroPinMasks[3]), (uint32_t)macroPinMasks[0],
                          (uint32_t)(macroPinMasks[0] | macroPinMasks[1]), isMacroRunning)) {
             prevMacroInputPressed = true;   // don't start a regular macro under it
