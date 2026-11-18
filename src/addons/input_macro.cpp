@@ -703,7 +703,8 @@ namespace {
     //  HP (standing / walking, or crouching): your own hit; HP again inside 18f (crouch 12f) = the thunder feint cancel
     //  MK (standing or crouching): your own hit; 10f window: MP = seismo, LP = the st.HP feint, HP = OD seismo (LP+MP),
     //    a kick = burning kick of that kick on the seismo motion
-    //  any seismo (yours or a macro's): 20f window: LP = seismo feint, MP / HP = seismo, LK / MK / HK = burning kick
+    //  any seismo (yours or a macro's): 20f window with the stick held down-back: LP = seismo feint, MP / HP = seismo,
+    //    HK = burning kick, LK / MK = the hold lets go and the kick goes out as it is
     //  a window's cancel starts when the window ends, even if you pressed earlier (the seismo window's burning kick: always 19f after the punch)
     //  Macro 5 / 6 = Level 1 (fixed on screen); burnout (turbo button): X = Level 1
     //  jump protection: 43f after you press up, the first HP / MK press starts nothing (once per jump)
@@ -752,9 +753,13 @@ namespace {
         }
 
         // ---- open window: remember the first button, start its cancel when the window ends
+        if (V.win == W_SZ && !V.winPick && (rising & (LK | MK))) {
+            V.win = W_NONE;                       // LK / MK in the seismo window: the down-back hold lets go, the kick goes out
+        }
         if (V.win != W_NONE) {
-            // seismo window: punches count until 20f, a kick until 19f
-            uint32_t accept = (V.win == W_SZ && now >= V.winAt + V_WIN_SZ_US - FRAME_US) ? PUNCH_MASK : ATTACK_MASK;
+            // seismo window: punches count until 20f, HK until 19f (LK / MK are handled above)
+            uint32_t accept = V.win == W_MK ? ATTACK_MASK
+                            : (now >= V.winAt + V_WIN_SZ_US - FRAME_US) ? PUNCH_MASK : (PUNCH_MASK | HK);
             uint32_t want = rising & accept;
             if (want && !V.winPick) V.winPick = pickOne(want);
             V.suppress |= want;                   // window presses never reach the game
@@ -837,6 +842,8 @@ namespace {
             }
         }
 
+        // seismo window: the stick is held down-back (from 1f after the seismo punch) until a cancel starts or the window ends
+        if (V.win == W_SZ && now >= V.winAt + FRAME_US) gp->state.dpad = toAbs(DB);
         if (V.burnout) V.suppress |= (phys & XBTN);
         gp->state.buttons &= ~V.suppress;
         return false;
