@@ -189,6 +189,7 @@ namespace {
     bool ingridActive = false;      // Ingrid profile (Aki engine: qcf/qcb + LK, punch supers, standing HK -> X = Level 1)
     bool chunActive = false;        // Chun-Li profile (↓↓ kick gear, air qcf kick dive; all six macros run by chunProcess)
     bool jamieActive = false;       // Jamie profile (Cammy's engine; its free button does the command grab / qcf kick)
+    bool baneActive = false;        // Bane (Injustice page): anti-air gear LP / MP, LT+RT, Venom Boost on MK, X = LB
     bool kimActive = false;         // Kimberly profile (anti-air gear, air qcf punch / qcb kick; all six macros run by kimProcess)
     MacroOptions g_pinkOpts;        // Manon
     MacroOptions g_cammyOpts;       // Cammy, Jamie
@@ -215,8 +216,59 @@ namespace {
             }
         }
     }
-    // The pin 20 + Macro 1 (next) / Macro 2 (previous) cycle, in order.
-    enum { P_SAGAT, P_LUKE, P_CAMMY, P_JAMIE, P_AKI, P_CHUN, P_INGRID, P_KIM, P_LILY, P_ARJIN, P_MANON, P_VIPER, P_COUNT };
+    // Bane (Injustice): Macro 1/2 = Viper's anti-air motion with the LP / MP gear, Macro 3/4 = LT+RT,
+    // Macro 5 = ↓←→ + LK, Macro 6 = ↓→← + LK (fixed on screen)
+    MacroOptions g_baneOpts;
+    void buildBaneOptions() {
+        const uint32_t D = GAMEPAD_MASK_DD, L = GAMEPAD_MASK_DL, R = GAMEPAD_MASK_DR;
+        const SagatMacro BANE[6] = {
+            {"G aa right", 3, {{D, 25000u}, {D | L, 23332u}, {L | LP, 39996u}}},
+            {"G aa left",  3, {{D, 25000u}, {D | R, 23332u}, {R | LP, 39996u}}},
+            {"lt rt",      1, {{GAMEPAD_MASK_L2 | GAMEPAD_MASK_R2, 66666u}}},
+            {"lt rt",      1, {{GAMEPAD_MASK_L2 | GAMEPAD_MASK_R2, 66666u}}},
+            {"d b f lk",   3, {{D, 25000u}, {L, 23332u}, {R | LK, 39996u}}},
+            {"d f b lk",   3, {{D, 25000u}, {R, 23332u}, {L | LK, 39996u}}},
+        };
+        g_baneOpts = g_sagatOpts;
+        for (int i = 0; i < 6; i++) {
+            Macro& m = g_baneOpts.macroList[i];
+            const SagatMacro& d = BANE[i];
+            memset(m.macroLabel, 0, sizeof(m.macroLabel));
+            strncpy(m.macroLabel, d.label, sizeof(m.macroLabel) - 1);
+            m.macroInputs_count = d.n;
+            for (int k = 0; k < d.n; k++) {
+                m.macroInputs[k].buttonMask = d.s[k].mask;
+                m.macroInputs[k].duration = d.s[k].dur;
+                m.macroInputs[k].waitDuration = 0;
+            }
+        }
+    }
+    // Venom Boost (Bane): your MK starts a cycle: MK pressed for you 6.90s later and again 6.90s after that.
+    // Your MK during the cycle stops it (no new cycle for 2s); a finished cycle: no new cycle for 8s.
+    constexpr uint64_t VB_GAP_US = 6900000ULL, VB_PRESS_US = 4ULL * FRAME_US;
+    constexpr uint64_t VB_STOP_BLOCK_US = 2000000ULL, VB_DONE_BLOCK_US = 8000000ULL;
+    bool vbCycle = false, vbPrevMK = false, vbOut = false;
+    uint64_t vbStart = 0, vbBlockUntil = 0;
+    void vbReset() { vbCycle = false; vbOut = false; vbBlockUntil = 0; }
+    void baneVenom(uint32_t phys, uint64_t now) {
+        vbOut = false;
+        if (!baneActive) { vbCycle = false; vbPrevMK = false; return; }
+        bool mk = (phys & MK) != 0, rise = mk && !vbPrevMK;
+        vbPrevMK = mk;
+        if (rise) {
+            if (vbCycle) { vbCycle = false; vbBlockUntil = now + VB_STOP_BLOCK_US; }
+            else if (now >= vbBlockUntil) { vbCycle = true; vbStart = now; }
+        }
+        if (!vbCycle) return;
+        uint64_t t = now - vbStart;
+        if (t >= 2 * VB_GAP_US + VB_PRESS_US) { vbCycle = false; vbBlockUntil = vbStart + 2 * VB_GAP_US + VB_PRESS_US + VB_DONE_BLOCK_US; return; }
+        vbOut = (t >= VB_GAP_US && t < VB_GAP_US + VB_PRESS_US) || t >= 2 * VB_GAP_US;
+    }
+    // The pin 20 + Macro 1 (next) / Macro 2 (previous) cycle, in order. Page 1 = Street Fighter,
+    // page 2 (pin 20 + Macro 1 + Macro 2) = Injustice.
+    enum { P_SAGAT, P_LUKE, P_CAMMY, P_JAMIE, P_AKI, P_CHUN, P_INGRID, P_KIM, P_LILY, P_ARJIN, P_MANON, P_VIPER,
+           P_BANE, P_COUNT };
+    constexpr int PAGE2_START = P_BANE;
     struct Profile { MacroOptions* opts; int pic; uint32_t ledBase, ledBurn; };   // opts nullptr = stored config
     const Profile PROFILES[P_COUNT] = {
         {&g_sagatOpts,    0,  0xFFEB8C, 0xFF7800},   // Sagat: light yellow / orange
@@ -231,7 +283,10 @@ namespace {
         {&g_gearOnlyOpts, 1,  0xFFEB8C, 0xFF7800},   // Arjin: like Sagat
         {&g_pinkOpts,     2,  0xFF3CA0, 0x9600FF},   // Manon: pink / purple
         {nullptr,         3,  0xFFEB8C, 0xFF7800},   // Viper (stored config, its own LED code)
+        {&g_baneOpts,     12, 0x00AA00, 0x00AA00},   // Bane: dim green (as dim as Viper's red)
     };
+    int page1Return = P_SAGAT, page2Return = P_BANE, lastSwitchFrom = P_SAGAT;
+    bool singleSwitchHeld = false;
     int  profileIdx = P_SAGAT;
     void setProfileFlags() {            // everything that follows from profileIdx
         int p = profileIdx;
@@ -246,6 +301,7 @@ namespace {
         lilyActive   = (p == P_LILY);
         arjinActive  = (p == P_ARJIN);
         pinkActive   = (p == P_MANON);
+        baneActive   = (p == P_BANE);
         g_profilePic = PROFILES[p].pic;
         g_ledBase = PROFILES[p].ledBase; g_ledBurn = PROFILES[p].ledBurn; g_ledRainbow = kimActive;
         g_sagatMode = sagatActive;
@@ -1698,7 +1754,11 @@ namespace {
     }
     struct XTurboGuard {
         Gamepad* gp; uint64_t now; bool physX;
-        ~XTurboGuard() { applyXTurbo(gp, now, physX); }
+        ~XTurboGuard() {
+            if (!baneActive) { applyXTurbo(gp, now, physX); return; }
+            if (gp->state.buttons & XBTN) gp->state.buttons = (gp->state.buttons & ~XBTN) | GAMEPAD_MASK_L1;   // Bane: X = LB
+            if (vbOut) gp->state.buttons |= MK;
+        }
     };
 
     // Returns true when it owns the output this poll.
@@ -1777,6 +1837,7 @@ void InputMacro::setup() {
     buildSagatOptions();
     buildPinkOptions();
     buildCammyOptions();
+    buildBaneOptions();
     buildEngineOptions();
     profileIdx = P_SAGAT;               // power-up in the built-in Sagat set
     setProfileFlags();
@@ -1905,7 +1966,7 @@ void InputMacro::checkMacroAction() {
         macroStartTime = now; // current time
 
         // CUSTOM: DP (gear Macro 1 / 2) sets the side: DP right -> facing right, DP left -> facing left
-        if (sagatActive && macroPosition <= 1 && isGearMacro(macro)) {
+        if (sagatActive && !baneActive && macroPosition <= 1 && isGearMacro(macro)) {
             V.facingRight = (macroPosition == 0);
             g_viperFacingRight = V.facingRight;
         }
@@ -2032,6 +2093,7 @@ void InputMacro::preprocess()
     Gamepad * gamepad = Storage::getInstance().GetGamepad();
     uint64_t now = getMicro();
     XTurboGuard xturbo{gamepad, now, (gamepad->state.buttons & XBTN) != 0};   // applied on every exit
+    baneVenom(gamepad->state.buttons, now);
 
     // CUSTOM: pin 20 turns all macros on/off
     {
@@ -2046,15 +2108,31 @@ void InputMacro::preprocess()
         if (t && !prevTogglePin) togglePinCombo = false;
         bool m2 = macroPinMasks[1] && (gamepad->debouncedGpio & macroPinMasks[1]);
         bool comboNext = t && m1 && !prevComboMacro1, comboPrev = t && m2 && !prevComboMacro2;
+        bool comboPage = t && m1 && m2 && (comboNext || comboPrev);
+        if (!m1 && !m2) singleSwitchHeld = false;
         if (comboNext || comboPrev) {
-            // pin 20 held + Macro 1: next profile; pin 20 held + Macro 2: previous profile
+            // pin 20 held + Macro 1: next profile; pin 20 held + Macro 2: previous profile (on this page)
+            // pin 20 held + Macro 1 + Macro 2: the other page, back on the profile you left there
+            int target;
+            if (comboPage) {
+                int from = singleSwitchHeld ? lastSwitchFrom : profileIdx;   // undo the switch the first button made
+                singleSwitchHeld = false;
+                if (from >= PAGE2_START) { page2Return = from; target = page1Return; }
+                else                     { page1Return = from; target = page2Return; }
+            } else {
+                int lo = profileIdx >= PAGE2_START ? PAGE2_START : 0;
+                int n  = profileIdx >= PAGE2_START ? P_COUNT - PAGE2_START : PAGE2_START;
+                lastSwitchFrom = profileIdx; singleSwitchHeld = true;
+                target = lo + (profileIdx - lo + (comboNext ? 1 : n - 1)) % n;
+            }
             togglePinCombo = true;
             reset();
             viperReset();
             gearPendingMacro = -1;
             spamReset();
-            profileIdx = (profileIdx + (comboNext ? 1 : P_COUNT - 1)) % P_COUNT;
+            profileIdx = target;
             setProfileFlags();
+            vbReset();
             eKim.air = false; eKim.jumpAt = 0; kimGear = HP;
             eChun.air = false; eChun.jumpAt = 0; chunGear = MK; chunHPAt = 0; chunHPFireAt = 0; chunMPAt = 0; chunHKAt = 0;
             akiHKAt = 0;
@@ -2077,7 +2155,7 @@ void InputMacro::preprocess()
         prevComboMacro1 = m1;
         prevComboMacro2 = m2;
 
-        if (!t && prevTogglePin && !togglePinCombo && sagatActive) {
+        if (!t && prevTogglePin && !togglePinCombo && sagatActive && !baneActive) {
             V.facingRight = !V.facingRight;          // Sagat mode: pin 20 alone = side switch
             g_viperFacingRight = V.facingRight;
         } else if (!t && prevTogglePin && !togglePinCombo && viperMode) {
@@ -2107,7 +2185,7 @@ void InputMacro::preprocess()
         uint8_t sd = runSOCDCleaner(Gamepad::resolveSOCDMode(gamepad->getOptions()), gamepad->state.dpad);
         int dg = (sd == (GAMEPAD_MASK_DOWN | GAMEPAD_MASK_LEFT)) ? +1 : (sd == (GAMEPAD_MASK_DOWN | GAMEPAD_MASK_RIGHT)) ? -1 : 0;
         if (dg != sideDiag) { sideDiag = dg; sideDiagAt = now; }
-        if (dg && now - sideDiagAt >= 10ULL * FRAME_US && !V.playing && V.win == W_NONE && !isMacroRunning &&
+        if (dg && !baneActive && now - sideDiagAt >= 10ULL * FRAME_US && !V.playing && V.win == W_NONE && !isMacroRunning &&
                 V.facingRight != (dg > 0)) {
             V.facingRight = (dg > 0);
             g_viperFacingRight = V.facingRight;
@@ -2131,7 +2209,7 @@ void InputMacro::preprocess()
     trackDirections(gamepad->state.dpad, now);
 
     // CUSTOM: super spam (built-in profiles) owns the output while it repeats
-    if (sagatActive && !viperMode) {
+    if (sagatActive && !viperMode && !baneActive) {
         if (spamProcess(gamepad, now, isMacroRunning)) {
             prevMacroInputPressed = true;
             if (g_sagatBurnout) gamepad->state.buttons &= ~XBTN;
@@ -2191,7 +2269,7 @@ void InputMacro::preprocess()
         }
         gamepad->state.buttons &= ~V.suppress;   // OD punch stays hidden until released
     }
-    if (sagatActive) {
+    if (sagatActive && !baneActive) {
         if (sagatProcess(gamepad, now, turboPinMask, isMacroRunning)) {
             prevMacroInputPressed = true;
             return;
@@ -2233,7 +2311,7 @@ void InputMacro::preprocess()
             !inputMacroOptions->macroList[pressedMacro].useMacroTriggerButton) {
         // attack held, then gear button: gear changes right away, for every gear macro
         if (popcount32(attackHeld) == 1 && !(arjinActive && (attackHeld & KICK_MASK)) &&
-                !(cammyActive && (attackHeld & PUNCH_MASK))) {   // Arjin: punch gears only; Cammy / Jamie: kick gears only
+                !(cammyActive && (attackHeld & PUNCH_MASK)) && !(baneActive && !(attackHeld & (LP | MP)))) {   // Arjin: punch gears only; Cammy / Jamie: kick gears only
             for (int i = 0; i < MAX_MACRO_LIMIT; i++)
                 if (isGearMacro(inputMacroOptions->macroList[i])) gearMask[i] = attackHeld;
         }
