@@ -473,6 +473,8 @@ namespace {
         uint64_t winLen = 0;          // MK window: 10f standing, 12f crouching
         uint32_t winPick = 0;
         bool burnSeq = false;         // the sequence playing is a burning kick
+        uint64_t crMPAt = 0;          // your last crouching MP: a seismo of yours within 13f of it comes out OD
+        uint32_t odPunch = 0, odExtra = 0;   // OD seismo: the extra punch is added while you hold odPunch
         uint64_t burnLockUntil = 0;   // 70f after a burning kick: no button-combo macros (cancels, windows, burnout X)
 
         uint32_t suppress = 0;        // attack bits hidden from the game until released
@@ -702,6 +704,7 @@ namespace {
     //  HP (standing / walking, or crouching): your own hit; HP again inside 18f (crouch 12f) = the thunder feint cancel
     //  MK (standing or crouching): your own hit; 10f window: MP = seismo, LP = the st.HP feint, HP = OD seismo (LP+MP),
     //    a kick = burning kick of that kick on the seismo motion
+    //  your seismo within 13f of your ↓ + MP: always OD (the other punch is added)
     //  any seismo (yours or a macro's): 20f window with the stick held down-back: LP = seismo feint, MP / HP = seismo,
     //    HK = burning kick, LK / MK = the hold lets go and the kick goes out as it is
     //  a window's cancel starts when the window ends, even if you pressed earlier (the seismo window: 20f)
@@ -718,7 +721,7 @@ namespace {
     void viperReset() {
         V.playing = false; V.win = W_NONE; V.winPick = 0; V.suppress = 0;
         V.hpAt = 0; V.hpFireAt = 0; V.jumpGuard = JumpGuard();
-        V.burnSeq = false; V.burnLockUntil = 0;
+        V.burnSeq = false; V.burnLockUntil = 0; V.crMPAt = 0; V.odPunch = 0; V.odExtra = 0;
     }
     // Returns true when the Viper engine owns the output this poll.
     bool viperProcess(Gamepad* gp, uint64_t now, uint32_t m5, uint32_t m6, uint32_t burnPin, uint32_t qcbPins, bool otherMacroBusy) {
@@ -802,6 +805,7 @@ namespace {
         }
 
         // ---- new triggers (idle)
+        bool seismoNow = false;                   // this press was your seismo (not a ↓ + MP)
         bool idle = V.win == W_NONE && !V.playing && !otherMacroBusy && !(rel & RU);
         bool burnLock = now < V.burnLockUntil;    // 70f after a burning kick: no button-combo macros
         if (V.hpFireAt && now >= V.hpFireAt && !idle) V.hpFireAt = 0;   // something else is going on: drop the queued cancel
@@ -823,6 +827,13 @@ namespace {
                 // you did a seismo yourself: the punch goes out as it is and the seismo window opens
                 V.win = W_SZ; V.winAt = now; V.winPick = 0;
                 V.hpAt = 0;
+                seismoNow = true;
+                // within 13f of your ↓ + MP: always OD (LP is added to MP / HP, MP to LP) on the same frame
+                uint32_t p = rising & PUNCH_MASK;
+                if (V.crMPAt && now - V.crMPAt <= 13ULL * FRAME_US && popcount32(p) == 1) {
+                    V.odPunch = p; V.odExtra = (p == LP) ? MP : LP;
+                }
+                V.crMPAt = 0;
             } else if ((r & ATTACK_MASK) == HP && !(phys & ATTACK_MASK & ~HP)) {
                 if (V.hpAt && !V.hpFireAt && now - V.hpAt < (V.hpCrouch ? 12ULL : 18ULL) * FRAME_US) {
                     // second HP inside the window: hidden. st.HP: the cancel starts right away. cr.HP: at a random
@@ -847,6 +858,13 @@ namespace {
             }
         }
 
+        // your ↓ + MP (alone, not a seismo), for the OD seismo rule
+        if (!seismoNow && (rising & ATTACK_MASK) == MP && !(phys & ATTACK_MASK & ~MP) && (rel & RD) && !V.playing) V.crMPAt = now;
+        // OD seismo: the extra punch goes out with yours until you let go of it
+        if (V.odExtra) {
+            if ((phys & V.odPunch) && !V.playing) gp->state.buttons |= V.odExtra;
+            else { V.odExtra = 0; V.odPunch = 0; }
+        }
         // seismo window: the stick is held down-back (from 1f after the seismo punch) until a cancel starts or the window ends
         if (V.win == W_SZ && now >= V.winAt + FRAME_US) gp->state.dpad = toAbs(DB);
         if (V.burnout && now >= V.burnLockUntil) V.suppress |= (phys & XBTN);
