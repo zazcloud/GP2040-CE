@@ -243,26 +243,42 @@ namespace {
             }
         }
     }
-    // Venom Boost (Bane): your MK starts a cycle: MK pressed for you 5.85s later and again 5.85s after that.
-    // Your MK during the cycle stops it (no new cycle for 2s); a finished cycle: no new cycle for 8s.
-    constexpr uint64_t VB_GAP_US = 5850000ULL, VB_PRESS_US = 4ULL * FRAME_US;
-    constexpr uint64_t VB_STOP_BLOCK_US = 2000000ULL, VB_DONE_BLOCK_US = 8000000ULL;
-    bool vbCycle = false, vbPrevMK = false, vbOut = false;
-    uint64_t vbStart = 0, vbBlockUntil = 0;
-    void vbReset() { vbCycle = false; vbOut = false; vbBlockUntil = 0; }
+    // Venom Boost (Bane): your MK comes out and nothing else happens, unless LT comes out within 5.80s of it:
+    // then MK is pressed for you 5.80s after your MK, and again 5.85s after that. Your own MK while the cycle
+    // runs counts as one of its presses: the timer starts again from it (the last one ends the cycle).
+    // A finished cycle: no new cycle for 8s. Your MK always comes out, with everything.
+    constexpr uint64_t VB_ARM_US = 5800000ULL, VB_GAP_US = 5850000ULL, VB_PRESS_US = 4ULL * FRAME_US;
+    constexpr uint64_t VB_DONE_BLOCK_US = 8000000ULL;
+    enum { VB_IDLE, VB_WAIT_LT, VB_RUN };
+    int vbState = VB_IDLE, vbLeft = 0;
+    bool vbPrevMK = false, vbOut = false, vbPhysMK = false, vbPressing = false;
+    uint64_t vbStart = 0, vbNextAt = 0, vbBlockUntil = 0;
+    void vbReset() { vbState = VB_IDLE; vbOut = false; vbPressing = false; vbBlockUntil = 0; }
+    void vbEnd(uint64_t at) { vbState = VB_IDLE; vbPressing = false; vbBlockUntil = at + VB_DONE_BLOCK_US; }
     void baneVenom(uint32_t phys, uint64_t now) {
         vbOut = false;
-        if (!baneActive) { vbCycle = false; vbPrevMK = false; return; }
-        bool mk = (phys & MK) != 0, rise = mk && !vbPrevMK;
-        vbPrevMK = mk;
+        vbPhysMK = baneActive && (phys & MK);
+        if (!baneActive) { vbState = VB_IDLE; vbPrevMK = false; return; }
+        bool rise = vbPhysMK && !vbPrevMK;
+        vbPrevMK = vbPhysMK;
+        if (vbState == VB_WAIT_LT && now - vbStart >= VB_ARM_US) vbState = VB_IDLE;       // no LT: nothing
         if (rise) {
-            if (vbCycle) { vbCycle = false; vbBlockUntil = now + VB_STOP_BLOCK_US; }
-            else if (now >= vbBlockUntil) { vbCycle = true; vbStart = now; }
+            if (vbState == VB_RUN) {                     // your MK counts as one press of the cycle
+                vbPressing = false;
+                if (--vbLeft <= 0) vbEnd(now);
+                else vbNextAt = now + VB_GAP_US;
+            } else if (now >= vbBlockUntil) {
+                vbState = VB_WAIT_LT; vbStart = now;
+            }
         }
-        if (!vbCycle) return;
-        uint64_t t = now - vbStart;
-        if (t >= 2 * VB_GAP_US + VB_PRESS_US) { vbCycle = false; vbBlockUntil = vbStart + 2 * VB_GAP_US + VB_PRESS_US + VB_DONE_BLOCK_US; return; }
-        vbOut = (t >= VB_GAP_US && t < VB_GAP_US + VB_PRESS_US) || t >= 2 * VB_GAP_US;
+        if (vbState != VB_RUN || now < vbNextAt) return;
+        if (now < vbNextAt + VB_PRESS_US) { vbOut = true; vbPressing = true; return; }
+        vbPressing = false;                              // a press of the cycle is over
+        if (--vbLeft <= 0) vbEnd(vbNextAt + VB_PRESS_US);
+        else vbNextAt += VB_GAP_US;
+    }
+    void baneSawLT(uint64_t now) {                       // LT came out
+        if (vbState == VB_WAIT_LT && now - vbStart < VB_ARM_US) { vbState = VB_RUN; vbLeft = 2; vbNextAt = vbStart + VB_ARM_US; }
     }
     // The pin 20 + Macro 1 (next) / Macro 2 (previous) cycle, in order. Page 1 = Street Fighter,
     // page 2 (pin 20 + Macro 1 + Macro 2) = Injustice.
@@ -1383,6 +1399,31 @@ namespace {
         }
         return false;
     }
+    // ---------------- Bane: back + LP, then MP within 8f = back, forward + MP (follows the side).
+    // back + LP, then LP again within 8f (the back LP, back LP, MP combo): no MP macro for 15f from that LP.
+    Eng eBane;
+    bool bnWin = false;
+    uint64_t bnWinAt = 0, bnLockUntil = 0;
+    bool baneProcess(Gamepad* gp, uint64_t now, bool macroBusy) {
+        Eng& e = eBane;
+        e.read(gp, 0, now, 0);
+        if (V.playing && runSeq(gp, now, e.prel)) return true;
+        uint32_t r = e.physRise;
+        if (bnWin && now - bnWinAt > 8ULL * FRAME_US) bnWin = false;
+        if ((r & MP) && bnWin && now >= bnLockUntil && !macroBusy) {
+            bnWin = false;
+            V.suppress |= MP;                            // your MP comes out with the forward
+            vClear();
+            vPush(B_, 0, randomRange(F10(12), F10(22)));
+            vPush(F_, MP, F10(24));
+            return play(gp, now, e.prel);
+        }
+        if (r & LP) {
+            if (bnWin) { bnWin = false; bnLockUntil = now + 15ULL * FRAME_US; }
+            else if (e.prel == B_) { bnWin = true; bnWinAt = now; }
+        }
+        return false;
+    }
     // ---------------- Cammy: diagonal jump, then a kick within 25f of the jump = qcb + that kick
     // (another kick within 2f of the first = OD, both kicks); Macro 3 = qcf qcf + P, Macro 4 = qcb qcb + P
     Eng eCammy;
@@ -1757,7 +1798,8 @@ namespace {
         ~XTurboGuard() {
             if (!baneActive) { applyXTurbo(gp, now, physX); return; }
             if (gp->state.buttons & XBTN) gp->state.buttons = (gp->state.buttons & ~XBTN) | GAMEPAD_MASK_L1;   // Bane: X = LB
-            if (vbOut) gp->state.buttons |= MK;
+            if (vbOut || vbPhysMK) gp->state.buttons |= MK;   // your MK always comes out
+            if (gp->state.buttons & GAMEPAD_MASK_L2) baneSawLT(now);
         }
     };
 
@@ -2155,7 +2197,7 @@ void InputMacro::preprocess()
         prevComboMacro1 = m1;
         prevComboMacro2 = m2;
 
-        if (!t && prevTogglePin && !togglePinCombo && sagatActive && !baneActive) {
+        if (!t && prevTogglePin && !togglePinCombo && sagatActive) {
             V.facingRight = !V.facingRight;          // Sagat mode: pin 20 alone = side switch
             g_viperFacingRight = V.facingRight;
         } else if (!t && prevTogglePin && !togglePinCombo && viperMode) {
@@ -2185,7 +2227,7 @@ void InputMacro::preprocess()
         uint8_t sd = runSOCDCleaner(Gamepad::resolveSOCDMode(gamepad->getOptions()), gamepad->state.dpad);
         int dg = (sd == (GAMEPAD_MASK_DOWN | GAMEPAD_MASK_LEFT)) ? +1 : (sd == (GAMEPAD_MASK_DOWN | GAMEPAD_MASK_RIGHT)) ? -1 : 0;
         if (dg != sideDiag) { sideDiag = dg; sideDiagAt = now; }
-        if (dg && !baneActive && now - sideDiagAt >= 10ULL * FRAME_US && !V.playing && V.win == W_NONE && !isMacroRunning &&
+        if (dg && now - sideDiagAt >= 10ULL * FRAME_US && !V.playing && V.win == W_NONE && !isMacroRunning &&
                 V.facingRight != (dg > 0)) {
             V.facingRight = (dg > 0);
             g_viperFacingRight = V.facingRight;
@@ -2261,6 +2303,13 @@ void InputMacro::preprocess()
             return;
         }
         gamepad->state.buttons &= ~V.suppress;   // the kick you pressed stays hidden until released
+    }
+    if (baneActive) {
+        if (baneProcess(gamepad, now, isMacroRunning)) {
+            prevMacroInputPressed = true;
+            return;
+        }
+        gamepad->state.buttons &= ~V.suppress;
     }
     if (lilyActive) {
         if (lilyProcess(gamepad, now, macroPinMasks[4], macroPinMasks[5], macroPinMasks[2], macroPinMasks[3], isMacroRunning)) {
