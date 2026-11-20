@@ -243,9 +243,9 @@ namespace {
             }
         }
     }
-    // Venom Boost (Bane): your MK starts a cycle: MK pressed for you 6.90s later and again 6.90s after that.
+    // Venom Boost (Bane): your MK starts a cycle: MK pressed for you 5.85s later and again 5.85s after that.
     // Your MK during the cycle stops it (no new cycle for 2s); a finished cycle: no new cycle for 8s.
-    constexpr uint64_t VB_GAP_US = 6900000ULL, VB_PRESS_US = 4ULL * FRAME_US;
+    constexpr uint64_t VB_GAP_US = 5850000ULL, VB_PRESS_US = 4ULL * FRAME_US;
     constexpr uint64_t VB_STOP_BLOCK_US = 2000000ULL, VB_DONE_BLOCK_US = 8000000ULL;
     bool vbCycle = false, vbPrevMK = false, vbOut = false;
     uint64_t vbStart = 0, vbBlockUntil = 0;
