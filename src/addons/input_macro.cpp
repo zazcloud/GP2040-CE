@@ -2331,7 +2331,7 @@ void InputMacro::preprocess()
     gamepad->state.buttons &= ~gearSwallow;
 
     // CUSTOM: gear selection (attack held, then G macro = instant gear)
-    uint32_t attackHeld = gamepad->state.buttons & ATTACK_MASK;
+    uint32_t attackHeld = gamepad->state.buttons & ATTACK_MASK & ~(baneActive ? MK : 0u);   // Bane: MK is never a gear, the macro runs with it
     Mask_t allPins = gamepad->debouncedGpio;
 
     if (gearPendingMacro >= 0) {
