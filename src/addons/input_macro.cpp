@@ -1456,9 +1456,9 @@ namespace {
         }
     }
     // Free button (Jamie only): LP / MP = command grab (+ LK), HP = OD command grab (LK+MK). Cammy: plain OD DP on both.
-    bool cammyProcess(Gamepad* gp, uint64_t now, uint32_t m3, uint32_t m4, uint32_t m5, uint32_t m6, bool macroBusy) {
+    bool cammyProcess(Gamepad* gp, uint64_t now, uint32_t m1, uint32_t m2, uint32_t m3, uint32_t m4, uint32_t m5, uint32_t m6, bool macroBusy) {
         Eng& e = eCammy;
-        e.read(gp, m3 | m4 | m5 | m6, now, ENG_STICK | ENG_JUMP);
+        e.read(gp, m1 | m2 | m3 | m4 | m5 | m6, now, ENG_STICK | ENG_JUMP);
         uint32_t phys = e.phys, physRise = e.physRise;
         uint32_t freeRise = jamieActive ? (e.rise & freePin(m5, m6)) : 0;
         freeOwnedPins = (freeOwnedPins | freeRise) & (uint32_t)gp->debouncedGpio;
@@ -1470,6 +1470,16 @@ namespace {
         // diagonal jump, then a kick within 25f: qcb away from the jump (↗ -> ↓ ↙ ←, ↖ -> ↓ ↘ →) + that kick
         if ((physRise & KICK_MASK) && e.jumped(now, 25)) return e.startAir(gp, now, physRise & KICK_MASK, -e.jumpDir);
         if (afbFire(phys)) {                        // pin 21: anti-fireball (Cammy qcb + punch, Jamie qcf + kick)
+            e.air = false;
+            return play(gp, now, e.prel);
+        }
+        if (!jamieActive && (e.rise & (m1 | m2)) && gearMask[0] == MP && !(phys & ATTACK_MASK)) {
+            // Cammy MP anti-air (fixed on screen, Macro 1 back = ←, Macro 2 back = →): back + MP 1.5–3f, back + HK
+            bool left = (e.rise & m1) != 0;
+            uint8_t back = (left == V.facingRight) ? RB : RF;
+            vClear();
+            vPush(back, MP, randomRange(F10(15), F10(30)));
+            vPush(back, HK, F10(24));
             e.air = false;
             return play(gp, now, e.prel);
         }
@@ -2298,7 +2308,7 @@ void InputMacro::preprocess()
         gamepad->state.buttons &= ~V.suppress;   // X used for the ↓HK rule stays hidden until released
     }
     if (cammyActive) {
-        if (cammyProcess(gamepad, now, macroPinMasks[2], macroPinMasks[3], macroPinMasks[4], macroPinMasks[5], isMacroRunning)) {
+        if (cammyProcess(gamepad, now, macroPinMasks[0], macroPinMasks[1], macroPinMasks[2], macroPinMasks[3], macroPinMasks[4], macroPinMasks[5], isMacroRunning)) {
             prevMacroInputPressed = true;
             return;
         }
@@ -2360,7 +2370,7 @@ void InputMacro::preprocess()
             !inputMacroOptions->macroList[pressedMacro].useMacroTriggerButton) {
         // attack held, then gear button: gear changes right away, for every gear macro
         if (popcount32(attackHeld) == 1 && !(arjinActive && (attackHeld & KICK_MASK)) &&
-                !(cammyActive && (attackHeld & PUNCH_MASK)) && !(baneActive && !(attackHeld & (LP | MP)))) {   // Arjin: punch gears only; Cammy / Jamie: kick gears only
+                !(cammyActive && (attackHeld & PUNCH_MASK) && !(!jamieActive && attackHeld == MP)) && !(baneActive && !(attackHeld & (LP | MP)))) {   // Arjin: punch gears only; Cammy / Jamie: kick gears only
             for (int i = 0; i < MAX_MACRO_LIMIT; i++)
                 if (isGearMacro(inputMacroOptions->macroList[i])) gearMask[i] = attackHeld;
         }
