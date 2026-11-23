@@ -566,6 +566,8 @@ namespace {
     uint32_t vBtn()   { return randomRange(BTN_MIN_US, BTN_MAX_US); }
 
     void vClear() { V.seqLen = 0; }
+    // every Macro 1 / 2 is an anti-air and sets the side: Macro 1 -> facing right, Macro 2 -> facing left
+    void aaSide(bool right) { V.facingRight = right; g_viperFacingRight = right; }
     void vPush(uint8_t dir, uint32_t btn, uint32_t dur, uint8_t flags = 0) {
         if (V.seqLen >= 16) return;
         V.seq[V.seqLen++] = {dir, btn, dur, 0, flags};
@@ -676,6 +678,24 @@ namespace {
         V.burnSeq = true;
     }
     void seqMKSeismo(uint32_t punches) { seqCancel(punches, true); }
+    // Seismo cancel after your st.MK / cr.MK (as in your input history): → 2f, ↘ 4f, → 4f, ↗ 1f, ↗ + punch,
+    // starting on frame 5 (your MK = frame 1). A later punch press starts it right away and takes the
+    // late frames off → / ↘ / → in that order (none under 1.2f). ↗ + punch: on the left side 5-8f, on the
+    // right side 22f exactly; the arrow stays with the punch (no early release).
+    void seqMKSeismoFast(uint32_t punches, uint64_t lateUs) {
+        uint32_t d[3] = {F10(20), F10(40), F10(40)};
+        for (int i = 0; i < 3 && lateUs; i++) {
+            uint32_t cut = d[i] - F10(12);
+            if (cut > lateUs) cut = (uint32_t)lateUs;
+            d[i] -= cut; lateUs -= cut;
+        }
+        vClear();
+        vPush(F_, 0, d[0]);
+        vPush(DF, 0, d[1]);
+        vPush(F_, 0, d[2]);
+        vPush(UF, 0, F10(10));
+        vPush(UF, punches, V.facingRight ? randomRange(F10(50), F10(80)) : F10(220), FL_SEISMO | FL_OWN_CUT);
+    }
     void seqMKBurn(uint32_t kick) { seqBurnKick(kick); }
     void seqSeismoFeint() {                     // ... then ↗ + LP 3-4f, LK joins for 3-4f; LP lets go with it or 1-2f earlier
         seismoMotion();
@@ -840,7 +860,13 @@ namespace {
             // MK window: its end. Seismo window: every cancel starts at 20f (frame 21 counting the punch press
             // as frame 1; the burning kick's kick on frame 37)
             uint64_t endUs = V.win == W_MK ? V.winLen : V_WIN_SZ_US;
-            if (now >= V.winAt + endUs) {
+            uint64_t fast = V.winAt + 4ULL * FRAME_US;   // MK window: MP / HP seismo starts on frame 5, or at the press
+            if (V.win == W_MK && (V.winPick == MP || V.winPick == HP) && now >= fast && !V.playing && !otherMacroBusy) {
+                uint32_t b = V.winPick;
+                V.win = W_NONE; V.winPick = 0;
+                seqMKSeismoFast(b == HP ? (LP | MP) : MP, now - fast);
+                startSeq(now, 0, 0);
+            } else if (now >= V.winAt + endUs) {
                 VWin w = V.win; uint32_t b = V.winPick;
                 V.win = W_NONE; V.winPick = 0;
                 if (b && !V.playing && !otherMacroBusy) {
@@ -1296,6 +1322,7 @@ namespace {
                 V.suppress |= held;
                 return false;
             }
+            aaSide((rise & m1) != 0);
             seqPinkGear((rise & m1) ? +1 : -1, prel);
             cgrab = false;
             return play(gp, now, prel);
@@ -1476,6 +1503,7 @@ namespace {
         if (!jamieActive && (e.rise & (m1 | m2)) && gearMask[0] == MP && !(phys & ATTACK_MASK)) {
             // Cammy MP anti-air (fixed on screen, Macro 1 back = ←, Macro 2 back = →): back + MP 1.5–3f, back + HK
             bool left = (e.rise & m1) != 0;
+            aaSide(left);
             uint8_t back = (left == V.facingRight) ? RB : RF;
             vClear();
             vPush(back, MP, randomRange(F10(15), F10(30)));
@@ -1526,6 +1554,7 @@ namespace {
         }
         // macros are fixed on screen (not the side switch): "right" = toward →, "left" = toward ←
         if (rise & (m[0] | m[1])) {             // ↓ ↘ → + HP / ↓ ↙ ← + HP (Ingrid: + LK)
+            aaSide((rise & m[0]) != 0);
             seqQuarter((rise & m[0]) ? +1 : -1, ingridActive ? LK : HP, 12, 20);
         } else if (rise & (m[2] | m[3])) {      // supers: ↓ ↘ → ↓ ↘ → / ↓ ↙ ← ↓ ↙ ← + HP (Ingrid: LP / HP random)
             seqSuperFixed((rise & m[2]) ? +1 : -1, ingridActive ? (coin() ? LP : HP) : HP);
@@ -2018,10 +2047,7 @@ void InputMacro::checkMacroAction() {
         macroStartTime = now; // current time
 
         // CUSTOM: DP (gear Macro 1 / 2) sets the side: DP right -> facing right, DP left -> facing left
-        if (sagatActive && !baneActive && macroPosition <= 1 && isGearMacro(macro)) {
-            V.facingRight = (macroPosition == 0);
-            g_viperFacingRight = V.facingRight;
-        }
+        if (macroPosition <= 1) aaSide(macroPosition == 0);   // every Macro 1 / 2 (all profiles)
     }
 }
 
