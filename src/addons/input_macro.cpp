@@ -547,6 +547,7 @@ namespace {
         bool burnSeq = false;         // the sequence playing is a burning kick
         bool mkSzSeq = false;         // the sequence playing is the seismo of the MK window
         bool szMK = false;            // the open seismo window comes from the MK window's seismo
+        uint64_t crHPAt = 0;          // your last crouching HP: a seismo of yours soon after it comes out late in the game
         uint64_t crMPAt = 0;          // your last crouching MP: a seismo of yours within 20f of it comes out OD
         uint32_t odPunch = 0, odExtra = 0;   // OD seismo: the extra punch is added while you hold odPunch
         uint64_t burnLockUntil = 0;   // 70f after a burning kick: no button-combo macros (cancels, windows, burnout X)
@@ -839,7 +840,7 @@ namespace {
     void viperReset() {
         V.playing = false; V.win = W_NONE; V.winPick = 0; V.suppress = 0;
         V.hpAt = 0; V.hpFireAt = 0; V.jumpGuard = JumpGuard();
-        V.burnSeq = false; V.burnLockUntil = 0; V.crMPAt = 0; V.odPunch = 0; V.odExtra = 0;
+        V.burnSeq = false; V.burnLockUntil = 0; V.crMPAt = 0; V.crHPAt = 0; V.odPunch = 0; V.odExtra = 0;
     }
     // Returns true when the Viper engine owns the output this poll.
     bool viperProcess(Gamepad* gp, uint64_t now, uint32_t m5, uint32_t m6, uint32_t burnPin, uint32_t qcbPins, bool otherMacroBusy) {
@@ -950,7 +951,16 @@ namespace {
                 if (runSeq(gp, now, rel)) return true;
             } else if ((rising & PUNCH_MASK) && detectSeismoMotion(now)) {
                 // you did a seismo yourself: the punch goes out as it is and the seismo window opens
-                V.win = W_SZ; V.winAt = now; V.winPick = 0; V.szMK = false;
+                // a seismo pressed during your ↓ + HP's recovery comes out later in the game (measured in your input
+                // history): MP 18f or less after the HP: +6f, 19-20f: +9f; the window and its cancel count from there
+                uint64_t lateUs = 0;
+                if (V.crHPAt) {
+                    uint64_t gap = now - V.crHPAt;
+                    if (gap < 18ULL * FRAME_US + FRAME_US / 2) lateUs = 6ULL * FRAME_US;
+                    else if (gap < 20ULL * FRAME_US + FRAME_US / 2) lateUs = 9ULL * FRAME_US;
+                }
+                V.crHPAt = 0;
+                V.win = W_SZ; V.winAt = now + lateUs; V.winPick = 0; V.szMK = false;
                 V.hpAt = 0;
                 seismoNow = true;
                 // within 20f of your ↓ + MP: always OD (LP is added to MP / HP, MP to LP) on the same frame
@@ -983,6 +993,8 @@ namespace {
             }
         }
 
+        // your ↓ + HP, for the late seismo rule
+        if ((rising & HP) && (rel & RD)) V.crHPAt = now;
         // your ↓ + MP (alone, not a seismo), for the OD seismo rule
         if (!seismoNow && (rising & ATTACK_MASK) == MP && !(phys & ATTACK_MASK & ~MP) && (rel & RD) && !V.playing) V.crMPAt = now;
         // OD seismo: the extra punch goes out with yours until you let go of it
