@@ -466,7 +466,7 @@ namespace {
 
     // Smart start: skip the first direction if it is held / was just released
     int startPosition(const Macro& macro, uint64_t now) {
-        if (!isGearMacro(macro) || stepCount(macro) < 2) return 0;
+        if (!isGearMacro(macro) || stepCount(macro) < 2 || baneActive || viperMode) return 0;   // qc anti-airs: full motion
         uint32_t first = macro.macroInputs[0].buttonMask;
         if ((first & ATTACK_MASK) || !(first & DIR_MASK)) return 0;
 
@@ -547,6 +547,7 @@ namespace {
         bool burnSeq = false;         // the sequence playing is a burning kick
         bool mkSzSeq = false;         // the sequence playing is the seismo of the MK window
         bool szMK = false;            // the open seismo window comes from the MK window's seismo
+        uint64_t szDelaySeq = 0;      // the playing sequence's seismo: its window opens this much later (game delay)
         uint64_t crHPAt = 0;          // your last crouching HP: a seismo of yours soon after it comes out late in the game
         uint64_t crMPAt = 0;          // your last crouching MP: a seismo of yours within 20f of it comes out OD
         uint32_t odPunch = 0, odExtra = 0;   // OD seismo: the extra punch is added while you hold odPunch
@@ -568,7 +569,7 @@ namespace {
     uint32_t vArrow() { return randomRange(V_ARROW_MIN, V_ARROW_MAX); }
     uint32_t vBtn()   { return randomRange(BTN_MIN_US, BTN_MAX_US); }
 
-    void vClear() { V.seqLen = 0; V.mkSzSeq = false; }
+    void vClear() { V.seqLen = 0; V.mkSzSeq = false; V.szDelaySeq = 0; }
     // every Macro 1 / 2 is an anti-air and sets the side: Macro 1 -> facing right, Macro 2 -> facing left
     void aaSide(bool right) { V.facingRight = right; g_viperFacingRight = right; }
     void vPush(uint8_t dir, uint32_t btn, uint32_t dur, uint8_t flags = 0) {
@@ -679,6 +680,7 @@ namespace {
         vPush(F_, 0, F10(20));
         vPush(UF, 0, F10(10));
         vPush(UF, punches, randomRange(F10(30), F10(40)), FL_SEISMO | FL_OWN_CUT);
+        V.szDelaySeq = 24ULL * FRAME_US;              // seismo > seismo: its window / cancel count from 24f later
     }
     // Burning kick after the MK window's seismo (any kick): ↓ 3f, ↗ 3f, ↑ 2f, ↓ 3f, ↘ 3f, → 2f, → + kick 5f
     void seqMKSzBurn(uint32_t kick) {
@@ -721,6 +723,7 @@ namespace {
         vPush(UF, 0, F10(10));
         vPush(UF, punches, randomRange(F10(30), F10(40)), FL_SEISMO | FL_OWN_CUT);
         V.mkSzSeq = true;
+        V.szDelaySeq = 6ULL * FRAME_US;               // MK seismo (punch 15f after the MK): window / cancel +6f
     }
     void seqMKBurn(uint32_t kick) { seqBurnKick(kick); }
     void seqSeismoFeint() {                     // ... then ↗ + LP 3-4f, LK joins for 3-4f; LP lets go with it or 1-2f earlier
@@ -806,7 +809,7 @@ namespace {
                 return false;
             }
             if (V.seq[V.seqPos].flags & FL_SEISMO) {    // the seismo punch comes out now: its 17f window opens
-                V.win = W_SZ; V.winAt = V.stepStart; V.winPick = 0; V.szMK = V.mkSzSeq;
+                V.win = W_SZ; V.winAt = V.stepStart + V.szDelaySeq; V.winPick = 0; V.szMK = V.mkSzSeq;
             }
         }
         if (!V.playing) return false;
@@ -1464,6 +1467,47 @@ namespace {
             return play(gp, now, prel);
         }
         return false;
+    }
+    // ---------------- Cross-cut (DP anti-air profiles: Sagat, Luke, Cammy kick gears, Jamie, Lily, Arjin):
+    // the Macro 1 / 2 that flips the side = cross-cut instead of the DP: facing right + Macro 2 = → 4f, ↘ 4f, ↙ 4f,
+    // ← + the anti-air button 3f (facing left + Macro 1 = the mirror); the side flips with it
+    bool xcutPlaying = false;
+    uint32_t xcutPrevPins = 0;
+    bool xcutProfile() {
+        return profileIdx == P_SAGAT || profileIdx == P_LUKE || profileIdx == P_CAMMY || profileIdx == P_JAMIE ||
+               profileIdx == P_LILY || profileIdx == P_ARJIN;
+    }
+    bool crossProcess(Gamepad* gp, uint64_t now, uint32_t m1, uint32_t m2, bool macroBusy) {
+        uint32_t pins = (uint32_t)(gp->debouncedGpio & (m1 | m2));
+        uint32_t rise = pins & ~xcutPrevPins;
+        xcutPrevPins = pins;
+        if (xcutPlaying) {
+            if (V.playing && runSeq(gp, now, toRel(gp->state.dpad))) return true;
+            xcutPlaying = false;
+            return false;
+        }
+        if (!xcutProfile() || macroBusy || V.playing || !rise) return false;
+        if (gp->state.buttons & ATTACK_MASK) return false;          // attack held: gear choice
+        if (cammyActive && !jamieActive && gearMask[0] == MP) return false;   // Cammy MP anti-air: not a DP
+        bool right = (rise & m1) != 0;
+        if (right == V.facingRight) return false;                   // same side: the normal DP
+        int i = right ? 0 : 1;
+        uint32_t btn = gearMask[i];
+        if (!btn) {
+            const Macro& mc = PROFILES[profileIdx].opts->macroList[i];
+            for (int k = 0; k < (int)mc.macroInputs_count; k++) btn |= mc.macroInputs[k].buttonMask & ATTACK_MASK;
+        }
+        if (!btn) return false;
+        aaSide(right);
+        // facing (new side) right: ← 4, ↙ 4, ↘ 4, → + button 3; facing left: → 4, ↘ 4, ↙ 4, ← + button 3
+        vClear();
+        vPush(B_, 0, F10(40));
+        vPush(DB, 0, F10(40));
+        vPush(DF, 0, F10(40));
+        vPush(F_, btn, F10(30));
+        startSeq(now, 0, 0);
+        xcutPlaying = true;
+        return runSeq(gp, now, toRel(gp->state.dpad));
     }
     // ---------------- Bane: back + LP, then MP within 8f = back, forward + MP (follows the side).
     // back + LP, then LP again within 8f (the back LP, back LP, MP combo): no MP macro for 15f from that LP.
@@ -2334,6 +2378,12 @@ void InputMacro::preprocess()
         }
     }
 
+    // CUSTOM: cross-cut on the side-flipping Macro 1 / 2 (DP anti-air profiles)
+    if (crossProcess(gamepad, now, (uint32_t)macroPinMasks[0], (uint32_t)macroPinMasks[1], isMacroRunning)) {
+        prevMacroInputPressed = true;
+        return;
+    }
+
     // CUSTOM: Viper engine (runs first, owns the output while a Viper move plays)
     if (viperMode) {
         if (viperProcess(gamepad, now, macroPinMasks[4], macroPinMasks[5], turboPinMask,
@@ -2455,7 +2505,7 @@ void InputMacro::preprocess()
     } else if (sagatActive) {
         uint32_t gm = 0;
         for (int i = 0; i < MAX_MACRO_LIMIT && !gm; i++) {
-            const Macro& mc = inputMacroOptions->macroList[i];
+            const Macro& mc = PROFILES[profileIdx].opts->macroList[i];
             if (!mc.enabled || !isGearMacro(mc)) continue;
             if (gearMask[i]) gm = gearMask[i];
             else for (int k = 0; k < (int)mc.macroInputs_count; k++) gm |= mc.macroInputs[k].buttonMask & ATTACK_MASK;
