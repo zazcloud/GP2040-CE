@@ -547,6 +547,7 @@ namespace {
         bool burnSeq = false;         // the sequence playing is a burning kick
         bool mkSzSeq = false;         // the sequence playing is the seismo of the MK window
         bool szMK = false;            // the open seismo window comes from the MK window's seismo
+        bool mkCrouch = false;        // MK window was started crouching (holds ↓ + MK for 4f; standing holds N + MK)
         uint64_t szDelaySeq = 0;      // the playing sequence's seismo: its window opens this much later (game delay)
         uint64_t crHPAt = 0;          // your last crouching HP: a seismo of yours soon after it comes out late in the game
         uint64_t crMPAt = 0;          // your last crouching MP: a seismo of yours within 20f of it comes out OD
@@ -660,16 +661,6 @@ namespace {
         vPush(F_, 0, randomRange(F10(30), F10(50)));
         vPush(UF, 0, randomRange(F10(30), F10(50)));
     }
-    // Cancel motion for the seismo and the burning kick (fixed, no randomness):
-    // ↓ 3f, ↘ 2f, → 2f, ↗ 2f, then ↑ + the button 3f (a seismo opens its 20f window there)
-    void seqCancel(uint32_t btn, bool seismo) {
-        vClear();
-        vPush(D_, 0, F10(30));
-        vPush(DF, 0, F10(20));
-        vPush(F_, 0, F10(20));
-        vPush(UF, 0, F10(20));
-        vPush(U_, btn, F10(30), seismo ? FL_SEISMO : 0);
-    }
     // Seismo > seismo (the punch in a seismo window), after the → hold: same motion as burning kick
     // (↓ 5f, ↘ 4f, → 2f, ↗ 5f, N + punch 5f). Pre-punch arrows are 16f (was ~11.5f), so szDelaySeq is 27f
     // (was 31f) to keep the next seismo window aligned to the same game frame.
@@ -704,28 +695,21 @@ namespace {
         vPush(N_, kick, F10(50));
         V.burnSeq = true;
     }
-    void seqMKSeismo(uint32_t punches) { seqCancel(punches, true); }
-    // Seismo cancel after your st.MK / cr.MK: same motion as burning kick (↓ 5f, ↘ 4f, → 2f, ↗ 5f, N + punch 5f).
-    // Starts from frame 2 (after MK is sent at least 1f); presses after frame 5 trim ↓ / ↘ / → / ↗ (min 1.2f each)
-    // so the punch never slips past frame 21. szDelaySeq keeps the seismo window anchored at frame 25 from MK
-    // (same game frame as the previous 15f punch + 9f delay).
-    void seqMKSeismoFast(uint32_t punches, uint64_t lateUs, uint64_t mkAt, uint64_t now) {
-        uint32_t d[4] = {F10(50), F10(40), F10(20), F10(50)};
-        for (int i = 0; i < 4 && lateUs; i++) {
-            uint32_t cut = d[i] - F10(12);
-            if (cut > lateUs) cut = (uint32_t)lateUs;
-            d[i] -= cut; lateUs -= cut;
-        }
+    // MK window (13f buffered seismo): frames 1-4 hold ↓+MK (crouch) or N+MK (stand), frames 5-13 buffer
+    // ↓ 2f, ↘ 3f, → 1f, ↘ 2f, ↗ 1f. On frame 14: MP = medium seismo, HP = heavy seismo, LP = seismo feint.
+    void seqMKSeismoFinish(uint32_t punch) {
         vClear();
-        vPush(D_, 0, d[0]);
-        vPush(DF, 0, d[1]);
-        vPush(F_, 0, d[2]);
-        vPush(UF, 0, d[3]);
-        vPush(N_, punches, F10(50), FL_SEISMO);
+        vPush(UF, punch, randomRange(F10(30), F10(40)), FL_SEISMO | FL_OWN_CUT);
         V.mkSzSeq = true;
-        uint64_t punchAt = now + d[0] + d[1] + d[2] + d[3];
-        uint64_t targetWinAt = mkAt + 24ULL * FRAME_US;   // frame 25 from MK (was frame 16 + 9f)
-        V.szDelaySeq = (targetWinAt > punchAt) ? (targetWinAt - punchAt) : 0;
+        V.szDelaySeq = 11ULL * FRAME_US;              // punch on frame 14 (13f after MK) + 11f = frame 25 from MK
+    }
+    void seqMKSeismoFeint() {
+        vClear();
+        vPush(UF, LP, F10(30));
+        uint32_t kick = randomRange(F10(30), F10(40));
+        uint32_t early = coin() ? 0 : randomRange(F10(10), F10(20));
+        vPush(UF, LP | LK, kick - early);
+        if (early) vPush(UF, LK, early);
     }
     void seqMKBurn(uint32_t kick) { seqBurnKick(kick); }
     void seqSeismoFeint() {                     // ... then ↗ + LP 3-4f, LK joins for 3-4f; LP lets go with it or 1-2f earlier
@@ -786,6 +770,9 @@ namespace {
         V.isCrouchHP = false;
         V.seqPos = 0;
         V.stepStart = now;
+        if (V.playing && (V.seq[0].flags & FL_SEISMO)) {
+            V.win = W_SZ; V.winAt = now + V.szDelaySeq; V.winPick = 0; V.szMK = V.mkSzSeq;
+        }
         for (int i = 0; i < V.seqLen; i++) if (!(V.seq[i].flags & FL_OWN_CUT)) V.seq[i].heCut = 0;
         for (int i = V.seqLen - 1; i >= 0; i--) {       // early arrow release on the last arrow + button step
             const VStep& st = V.seq[i];
@@ -836,7 +823,7 @@ namespace {
     //  jump protection: 43f after you press up, the first HP / MK press starts nothing (once per jump)
     //  after a burning kick: 70f with no button-combo macros (HP cancels, MK / seismo windows, burnout X);
     //    the buttons are plain hits. Macro 1-6 always work (also in the air)
-    constexpr uint64_t V_WIN_MK_US = 10ULL * FRAME_US;
+    constexpr uint64_t V_WIN_MK_US = 13ULL * FRAME_US;
     constexpr uint64_t V_WIN_SZ_US = 17ULL * FRAME_US;   // the seismo window: the stick is held → on frames 2-17
     uint32_t pickOne(uint32_t m) {               // one button out of a press: LP, MP, HP, LK, MK, HK in that order
         for (uint32_t b : {LP, MP, HP, LK, MK, HK}) if (m & b) return b;
@@ -889,24 +876,17 @@ namespace {
             uint32_t want = rising & accept;
             if (want && !V.winPick) V.winPick = pickOne(want);
             V.suppress |= want;                   // window presses never reach the game
-            // MK window: its end. Seismo window: cancels start at 17f (frame 18), burning kick -1f at 16f (frame 17)
+            // MK window: 13f buffered seismo (cancels on frame 14). Seismo window: cancels start at 17f (frame 18), burning kick +1f at 18f (frame 19)
             uint64_t endUs = V.win == W_MK ? V.winLen
-                           : ((V.winPick & KICK_MASK) ? (V_WIN_SZ_US - FRAME_US) : V_WIN_SZ_US);
-            uint64_t mkMin = V.winAt + FRAME_US;          // wait at least 1f so MK reaches the game
-            uint64_t fast  = V.winAt + 4ULL * FRAME_US;   // presses after frame 5 trim the motion
-            if (V.win == W_MK && (V.winPick == MP || V.winPick == HP) && now >= mkMin && !V.playing && !otherMacroBusy) {
-                uint32_t b = V.winPick;
-                uint64_t mkAt = V.winAt;
-                V.win = W_NONE; V.winPick = 0;
-                seqMKSeismoFast(b == HP ? (LP | MP) : MP, now > fast ? (now - fast) : 0, mkAt, now);
-                startSeq(now, 0, 0);
-            } else if (now >= V.winAt + endUs) {
+                           : ((V.winPick & KICK_MASK) ? (V_WIN_SZ_US + FRAME_US) : V_WIN_SZ_US);
+            if (now >= V.winAt + endUs) {
                 VWin w = V.win; uint32_t b = V.winPick;
                 V.win = W_NONE; V.winPick = 0;
                 if (b && !V.playing && !otherMacroBusy) {
                     if (w == W_MK) {
                         if (b & KICK_MASK) seqMKBurn(b);
-                        else if (b == LP) seqStandHP(); else seqMKSeismo(b == HP ? (LP | MP) : MP);
+                        else if (b == LP) seqMKSeismoFeint();
+                        else seqMKSeismoFinish(b);    // MP = medium seismo, HP = heavy seismo
                     } else {
                         if (b == LP) seqSeismoFeint();
                         else if (b & PUNCH_MASK) seqSeismo(b);
@@ -995,8 +975,10 @@ namespace {
                     else V.hpAt = 0;
                 }
             } else if ((r & ATTACK_MASK) == MK && !(phys & ATTACK_MASK & ~MK)) {
-                V.win = W_MK; V.winAt = now; V.winPick = 0;   // your MK goes out as it is; 10f window (crouching 12f)
-                V.winLen = (rel & RD) ? V_WIN_MK_US + 2ULL * FRAME_US : V_WIN_MK_US;
+                V.win = W_MK; V.winAt = now; V.winPick = 0;
+                V.winLen = V_WIN_MK_US;                  // 13f buffered seismo window (crouching or standing)
+                V.mkCrouch = (rel & RD) != 0;
+                V.suppress |= MK;                        // avoid ghost MK re-press if held past frame 4
             }
         }
 
@@ -1013,6 +995,21 @@ namespace {
         if (V.win == W_SZ && now >= V.winAt + FRAME_US) gp->state.dpad = toAbs(F_);
         if (V.burnout && now >= V.burnLockUntil) V.suppress |= (phys & XBTN);
         gp->state.buttons &= ~V.suppress;
+        // MK 13f buffered seismo motion: frames 1-4 hold ↓+MK (crouch) or N+MK (stand), then ↓ 2f, ↘ 3f, → 1f, ↘ 2f, ↗ 1f
+        if (V.win == W_MK) {
+            uint64_t el = now - V.winAt;
+            if (el < 4ULL * FRAME_US) {
+                gp->state.dpad = toAbs(V.mkCrouch ? D_ : N_);
+                gp->state.buttons = MK;
+            } else {
+                uint8_t d = el < 6ULL * FRAME_US  ? D_
+                          : el < 9ULL * FRAME_US  ? DF
+                          : el < 10ULL * FRAME_US ? F_
+                          : el < 12ULL * FRAME_US ? DF : UF;
+                gp->state.dpad = toAbs(d);
+                gp->state.buttons = 0;
+            }
+        }
         return false;
     }
 
