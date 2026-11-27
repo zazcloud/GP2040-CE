@@ -548,6 +548,7 @@ namespace {
         bool mkSzSeq = false;         // the sequence playing is the seismo of the MK window
         bool szMK = false;            // the open seismo window comes from the MK window's seismo
         uint64_t hkMPAt = 0, hkHPAt = 0; // HK window: chord timestamps for MP + HP together
+        int      hkAASide = 0;        // HK window: +1 Macro 1 / -1 Macro 2 pressed (0 = MP+HP OD)
         uint64_t szDelaySeq = 0;      // the playing sequence's seismo: its window opens this much later (game delay)
         uint64_t crHPAt = 0;          // your last crouching HP: a seismo of yours soon after it comes out late in the game
         uint64_t crMPAt = 0;          // your last crouching MP: a seismo of yours within 20f of it comes out OD
@@ -566,6 +567,7 @@ namespace {
         uint64_t hStart[16];
         int hHead = 0, hCount = 0;
     } V;
+    uint32_t freeOwnedPins = 0;                      // macro-button presses owned by an engine: no plain macro until released
 
     uint32_t vArrow() { return randomRange(V_ARROW_MIN, V_ARROW_MAX); }
     uint32_t vBtn()   { return randomRange(BTN_MIN_US, BTN_MAX_US); }
@@ -827,11 +829,12 @@ namespace {
         V.playing = false; V.win = W_NONE; V.winPick = 0; V.suppress = 0;
         V.hpAt = 0; V.hpFireAt = 0; V.jumpGuard = JumpGuard();
         V.burnSeq = false; V.burnLockUntil = 0; V.crMPAt = 0; V.crHPAt = 0; V.odPunch = 0; V.odExtra = 0;
-        V.hkMPAt = 0; V.hkHPAt = 0;
+        V.hkMPAt = 0; V.hkHPAt = 0; V.hkAASide = 0;
     }
     // Returns true when the Viper engine owns the output this poll.
     bool viperProcess(Gamepad* gp, uint64_t now, uint32_t m1, uint32_t m2, uint32_t m5, uint32_t m6, uint32_t burnPin, bool otherMacroBusy) {
         Mask_t pins = gp->debouncedGpio;
+        freeOwnedPins &= (uint32_t)pins;
         uint32_t aaNow = (uint32_t)(pins & (m1 | m2));
         uint32_t aaRising = aaNow & ~V.prevQcbPins;
         if (aaRising) V.qcbBlockUntil = now + 57ULL * FRAME_US;   // anti-air (qcb) macro pressed
@@ -868,15 +871,23 @@ namespace {
         }
         if (V.win != W_NONE) {
             if (V.win == W_HK) {
-                // HK 12f window: MP + HP pressed together (within 3f chord tolerance) -> OD thunder jump cancel
+                // st.HK 12f window: MP + HP together -> OD thunder jump; Macro 1/2 -> HP thunder jump
+                if (aaRising) {
+                    freeOwnedPins |= aaRising;    // claim this Macro 1/2 press so stored anti-air does not fire
+                    if (!V.winPick) {
+                        V.winPick = HP;
+                        V.hkAASide = (aaRising & m1) ? +1 : -1;
+                    }
+                }
                 if (rising & MP) V.hkMPAt = now;
                 if (rising & HP) V.hkHPAt = now;
                 bool mpRecent = V.hkMPAt && (now - V.hkMPAt <= V_CHORD_WIN_US || (phys & MP));
                 bool hpRecent = V.hkHPAt && (now - V.hkHPAt <= V_CHORD_WIN_US || (phys & HP));
                 if (!V.winPick && (rising & (MP | HP)) && mpRecent && hpRecent) {
                     V.winPick = LP | MP;
+                    V.hkAASide = 0;
                     V.suppress |= (MP | HP);
-                } else if (V.winPick) {
+                } else if (V.winPick == (LP | MP)) {
                     V.suppress |= rising & (MP | HP);
                 }
             } else {
@@ -890,10 +901,11 @@ namespace {
             uint64_t endUs = (V.win == W_MK || V.win == W_HK) ? V.winLen
                            : ((V.winPick & KICK_MASK) ? (V_WIN_SZ_US + FRAME_US) : V_WIN_SZ_US);
             if (now >= V.winAt + endUs) {
-                VWin w = V.win; uint32_t b = V.winPick;
-                V.win = W_NONE; V.winPick = 0; V.hkMPAt = 0; V.hkHPAt = 0;
+                VWin w = V.win; uint32_t b = V.winPick; int aaSidePick = V.hkAASide;
+                V.win = W_NONE; V.winPick = 0; V.hkMPAt = 0; V.hkHPAt = 0; V.hkAASide = 0;
                 if (b && !V.playing && !otherMacroBusy) {
                     if (w == W_HK) {
+                        if (aaSidePick) aaSide(aaSidePick > 0);
                         seqThunderJump(b);
                     } else if (w == W_MK) {
                         seqMKBurn(b);
@@ -919,18 +931,9 @@ namespace {
             if (runSeq(gp, now, rel)) return true;
         }
 
-        // ---- Macro 1 / 2 (Anti-air): ↓ 2f, ↙ 2f, ← 3f, ↖ 3f, ↖+HP 4f, ↑+HP 2f, N+HP 5f (always works)
-        if (aaRising && !V.playing && !otherMacroBusy) {
-            V.win = W_NONE; V.winPick = 0; V.hpAt = 0; V.hpFireAt = 0; V.hkMPAt = 0; V.hkHPAt = 0;
-            aaSide((aaRising & m1) != 0);
-            seqThunderJump(HP);
-            startSeq(now, 0, 0);
-            if (runSeq(gp, now, rel)) return true;
-        }
-
         // ---- Macro 5 / 6 (Level 1, fixed on screen): any time nothing is playing, also in the air
         if (lv1Rising && !V.playing && !otherMacroBusy) {
-            V.win = W_NONE; V.winPick = 0; V.hpAt = 0; V.hpFireAt = 0; V.hkMPAt = 0; V.hkHPAt = 0;
+            V.win = W_NONE; V.winPick = 0; V.hpAt = 0; V.hpFireAt = 0; V.hkMPAt = 0; V.hkHPAt = 0; V.hkAASide = 0;
             seqLevel1Screen((lv1Rising & m5) ? +1 : -1);
             startSeq(now, 0, 0);
             if (runSeq(gp, now, rel)) return true;
@@ -939,11 +942,16 @@ namespace {
         // ---- new triggers (idle)
         bool seismoNow = false;                   // this press was your seismo (not a ↓ + MP)
         bool idle = V.win == W_NONE && !V.playing && !otherMacroBusy && !(rel & RU);
-        bool burnLock = now < V.burnLockUntil;    // 70f after a burning kick: no button-combo macros
+        bool burnLock = now < V.burnLockUntil;    // 70f after a burning kick: no button-combo macros (except st.HK)
+        bool stHK = (r & ATTACK_MASK) == HK && !(phys & ATTACK_MASK & ~HK) && !(rel & RD);
         if (V.hpFireAt && now >= V.hpFireAt && !idle) V.hpFireAt = 0;   // something else is going on: drop the queued cancel
         if (idle) {
             if (burnLock) {
-                V.hpAt = 0; V.hpFireAt = 0;       // your presses are plain hits
+                V.hpAt = 0; V.hpFireAt = 0;       // other button-combo macros locked; exception: st.HK 12f window
+                if (stHK) {
+                    V.win = W_HK; V.winAt = now; V.winPick = 0; V.winLen = V_WIN_HK_US;
+                    V.hkMPAt = 0; V.hkHPAt = 0; V.hkAASide = 0;
+                }
             } else if (V.hpFireAt && now >= V.hpFireAt) {          // the queued HP cancel starts now
                 bool crouch = V.hpCrouch;
                 V.hpFireAt = 0; V.hpAt = 0;
@@ -957,24 +965,27 @@ namespace {
                 if (runSeq(gp, now, rel)) return true;
             } else if ((rising & PUNCH_MASK) && detectSeismoMotion(now)) {
                 // you did a seismo yourself: the punch goes out as it is and the seismo window opens
-                // a seismo pressed during your ↓ + HP's recovery comes out later in the game (measured in your input
-                // history): MP 18f or less after the HP: +6f, 19-20f: +9f; the window and its cancel count from there
-                uint64_t lateUs = 0;
+                // within 18f of ↓ + HP: anchored to ↓ + HP + 24f so early presses still land at 42f for burning kick;
+                // 19-20f: +9f from seismo press; OD seismo (2+ punches or within 20f of ↓ + MP): +1f extra wait
+                uint64_t winAt = now;
                 if (V.crHPAt) {
                     uint64_t gap = now - V.crHPAt;
-                    if (gap < 18ULL * FRAME_US + FRAME_US / 2) lateUs = 6ULL * FRAME_US;
-                    else if (gap < 20ULL * FRAME_US + FRAME_US / 2) lateUs = 9ULL * FRAME_US;
+                    if (gap < 18ULL * FRAME_US + FRAME_US / 2) winAt = V.crHPAt + 24ULL * FRAME_US;
+                    else if (gap < 20ULL * FRAME_US + FRAME_US / 2) winAt = now + 9ULL * FRAME_US;
                 }
                 V.crHPAt = 0;
-                V.win = W_SZ; V.winAt = now + lateUs; V.winPick = 0; V.szMK = false;
-                V.hpAt = 0;
-                seismoNow = true;
-                // within 20f of your ↓ + MP: always OD (LP is added to MP / HP, MP to LP) on the same frame
                 uint32_t p = rising & PUNCH_MASK;
+                bool isOD = popcount32(p) >= 2;
+                // within 20f of your ↓ + MP: always OD (LP is added to MP / HP, MP to LP) on the same frame
                 if (V.crMPAt && now - V.crMPAt <= 20ULL * FRAME_US && popcount32(p) == 1) {
                     V.odPunch = p; V.odExtra = (p == LP) ? MP : LP;
+                    isOD = true;
                 }
                 V.crMPAt = 0;
+                if (isOD) winAt += FRAME_US;      // OD seismo: +1f extra wait
+                V.win = W_SZ; V.winAt = winAt; V.winPick = 0; V.szMK = false;
+                V.hpAt = 0;
+                seismoNow = true;
             } else if ((r & ATTACK_MASK) == HP && !(phys & ATTACK_MASK & ~HP)) {
                 if (V.hpAt && !V.hpFireAt && now - V.hpAt < (V.hpCrouch ? 12ULL : 18ULL) * FRAME_US) {
                     // second HP inside the window: hidden. st.HP: the cancel starts right away. cr.HP: at a random
@@ -996,10 +1007,10 @@ namespace {
             } else if ((r & ATTACK_MASK) == MK && !(phys & ATTACK_MASK & ~MK)) {
                 V.win = W_MK; V.winAt = now; V.winPick = 0;   // your MK goes out plain; 10f window (crouching 12f), kicks only
                 V.winLen = (rel & RD) ? V_WIN_MK_US + 2ULL * FRAME_US : V_WIN_MK_US;
-            } else if ((r & ATTACK_MASK) == HK && !(phys & ATTACK_MASK & ~HK)) {
-                V.win = W_HK; V.winAt = now; V.winPick = 0;   // your HK goes out plain; 12f window for MP + HP together
+            } else if (stHK) {
+                V.win = W_HK; V.winAt = now; V.winPick = 0;   // standing HK: 12f window for MP+HP (OD) or Macro 1/2 (HP)
                 V.winLen = V_WIN_HK_US;
-                V.hkMPAt = 0; V.hkHPAt = 0;
+                V.hkMPAt = 0; V.hkHPAt = 0; V.hkAASide = 0;
             }
         }
 
@@ -1110,7 +1121,6 @@ namespace {
     // Free button (Jamie, Chun-Li): of Macro 5 / Macro 6, the one that points away from the side you
     // face is useless as it is, so it does a side-following special instead. Facing right -> Macro 6 is free,
     // facing left -> Macro 5. Its move is chosen like a gear: hold an attack + press it (stays until changed).
-    uint32_t freeOwnedPins = 0;                      // free-button presses the engine took: no plain macro until released
     uint32_t freePin(uint32_t m5, uint32_t m6) { return V.facingRight ? m6 : m5; }
     // Anti-fireball button = GPIO pin 21 (Manon, Cammy, Jamie), hidden from the game in those profiles.
     //   Manon: qcf + punch. Cammy: qcb + punch. Jamie: qcf + kick. All follow the side.
@@ -2023,7 +2033,7 @@ void InputMacro::checkMacroPress() {
     for(int i = 0; i < MAX_MACRO_LIMIT; i++) {
         if ( inputMacroOptions->macroList[i].enabled == false ) // Skip disabled macros
             continue;
-        if ( viperMode && (i == 0 || i == 1 || i == 4 || i == 5) )  // CUSTOM: anti-air (1/2) & Level 1 (5/6) in Viper mode
+        if ( viperMode && (i == 4 || i == 5) )  // CUSTOM: Level 1 (5/6) in Viper mode
             continue;
         if ( macroPinMasks[i] & freeOwnedPins )  // CUSTOM: this press belongs to the free-button rule
             continue;
