@@ -695,15 +695,16 @@ namespace {
         vPush(N_, kick, F10(50));
         V.burnSeq = true;
     }
-    // Thunder knuckle jump-cancel (qcb + up-back + punch, follows side):
-    // ↓ 2f, ↙ 2f, ← 3f, ↖ 3f, ↖ + btn 4f, ↑ + btn 2f, N + btn 5f
-    void seqThunderJump(uint32_t btn) {
+    // Thunder knuckle (fwd=false: qcb + up-back) or OD burning kick (fwd=true: qcf + up-forward), follows side:
+    // ↓ 2f, diag 2f, horiz 3f, up-diag 3f, up-diag + btn 4f, ↑ + btn 2f, N + btn 5f
+    void seqThunderJump(uint32_t btn, bool fwd = false) {
         vClear();
+        uint8_t dg = fwd ? DF : DB, hz = fwd ? F_ : B_, up = fwd ? UF : UB;
         vPush(D_, 0, F10(20));
-        vPush(DB, 0, F10(20));
-        vPush(B_, 0, F10(30));
-        vPush(UB, 0, F10(30));
-        vPush(UB, btn, F10(40));
+        vPush(dg, 0, F10(20));
+        vPush(hz, 0, F10(30));
+        vPush(up, 0, F10(30));
+        vPush(up, btn, F10(40));
         vPush(U_, btn, F10(20), FL_OWN_CUT);
         vPush(N_, btn, F10(50));
     }
@@ -871,12 +872,20 @@ namespace {
         }
         if (V.win != W_NONE) {
             if (V.win == W_HK) {
-                // st.HK 12f window: MP + HP together -> OD thunder jump; Macro 1/2 -> HP thunder jump
+                // st.HK 12f window: MP + HP -> OD thunder jump (qcb), Macro 1/2 -> HP thunder jump (qcb),
+                // MK -> OD burning kick (qcf)
                 if (aaRising) {
                     freeOwnedPins |= aaRising;    // claim this Macro 1/2 press so stored anti-air does not fire
                     if (!V.winPick) {
                         V.winPick = HP;
                         V.hkAASide = (aaRising & m1) ? +1 : -1;
+                    }
+                }
+                if (rising & MK) {
+                    V.suppress |= MK;
+                    if (!V.winPick) {
+                        V.winPick = LK | MK;
+                        V.hkAASide = 0;
                     }
                 }
                 if (rising & MP) V.hkMPAt = now;
@@ -906,7 +915,7 @@ namespace {
                 if (b && !V.playing && !otherMacroBusy) {
                     if (w == W_HK) {
                         if (aaSidePick) aaSide(aaSidePick > 0);
-                        seqThunderJump(b);
+                        seqThunderJump(b, (b & KICK_MASK) != 0);
                     } else if (w == W_MK) {
                         seqMKBurn(b);
                     } else {
@@ -965,24 +974,24 @@ namespace {
                 if (runSeq(gp, now, rel)) return true;
             } else if ((rising & PUNCH_MASK) && detectSeismoMotion(now)) {
                 // you did a seismo yourself: the punch goes out as it is and the seismo window opens
-                // within 18f of ↓ + HP: anchored to ↓ + HP + 24f so early presses still land at 42f for burning kick;
-                // 19-20f: +9f from seismo press; OD seismo (2+ punches or within 20f of ↓ + MP): +1f extra wait
+                // after ↓ + HP: floor at ↓ + HP + 26f (smoothly drops to 0 at 26f+, burning kick always starts at 44f)
+                // after ↓ + MP (within 20f): auto-OD + 1f extra (total +2f with OD); manual OD: +1f
                 uint64_t winAt = now;
-                if (V.crHPAt) {
-                    uint64_t gap = now - V.crHPAt;
-                    if (gap < 18ULL * FRAME_US + FRAME_US / 2) winAt = V.crHPAt + 24ULL * FRAME_US;
-                    else if (gap < 20ULL * FRAME_US + FRAME_US / 2) winAt = now + 9ULL * FRAME_US;
+                if (V.crHPAt && now < V.crHPAt + 26ULL * FRAME_US) {
+                    winAt = V.crHPAt + 26ULL * FRAME_US;
                 }
                 V.crHPAt = 0;
                 uint32_t p = rising & PUNCH_MASK;
                 bool isOD = popcount32(p) >= 2;
+                bool fromCrMP = V.crMPAt && now - V.crMPAt <= 20ULL * FRAME_US;
                 // within 20f of your ↓ + MP: always OD (LP is added to MP / HP, MP to LP) on the same frame
-                if (V.crMPAt && now - V.crMPAt <= 20ULL * FRAME_US && popcount32(p) == 1) {
+                if (fromCrMP && popcount32(p) == 1) {
                     V.odPunch = p; V.odExtra = (p == LP) ? MP : LP;
                     isOD = true;
                 }
                 V.crMPAt = 0;
                 if (isOD) winAt += FRAME_US;      // OD seismo: +1f extra wait
+                if (fromCrMP) winAt += FRAME_US;  // ↓ + MP -> OD seismo: +1f more (total +2f)
                 V.win = W_SZ; V.winAt = winAt; V.winPick = 0; V.szMK = false;
                 V.hpAt = 0;
                 seismoNow = true;
