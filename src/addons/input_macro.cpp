@@ -555,6 +555,7 @@ namespace {
         uint32_t airBtn = 0;
         bool     air = false;         // Viper air dive kick is playing
         uint64_t szDelaySeq = 0;      // the playing sequence's seismo: its window opens this much later (game delay)
+        uint64_t szBurnExtra = 0;     // extra burn wait on current W_SZ (+3f for raw seismo -> 21f; 0 for combos)
         uint64_t crHPAt = 0;          // your last crouching HP: a seismo of yours soon after it comes out late in the game
         uint64_t crMPAt = 0;          // your last crouching MP: a seismo of yours within 20f of it comes out OD
         uint32_t odPunch = 0, odExtra = 0;   // OD seismo: the extra punch is added while you hold odPunch
@@ -781,7 +782,7 @@ namespace {
         V.seqPos = 0;
         V.stepStart = now;
         if (V.playing && (V.seq[0].flags & FL_SEISMO)) {
-            V.win = W_SZ; V.winAt = now + V.szDelaySeq; V.winPick = 0; V.szMK = V.mkSzSeq;
+            V.win = W_SZ; V.winAt = now + V.szDelaySeq; V.winPick = 0; V.szMK = V.mkSzSeq; V.szBurnExtra = 0;
         }
         for (int i = 0; i < V.seqLen; i++) if (!(V.seq[i].flags & FL_OWN_CUT)) V.seq[i].heCut = 0;
         for (int i = V.seqLen - 1; i >= 0; i--) {       // early arrow release on the last arrow + button step
@@ -808,7 +809,7 @@ namespace {
                 return false;
             }
             if (V.seq[V.seqPos].flags & FL_SEISMO) {    // the seismo punch comes out now: its 17f window opens
-                V.win = W_SZ; V.winAt = V.stepStart + V.szDelaySeq; V.winPick = 0; V.szMK = V.mkSzSeq;
+                V.win = W_SZ; V.winAt = V.stepStart + V.szDelaySeq; V.winPick = 0; V.szMK = V.mkSzSeq; V.szBurnExtra = 0;
             }
         }
         if (!V.playing) return false;
@@ -848,7 +849,7 @@ namespace {
         V.playing = false; V.win = W_NONE; V.winPick = 0; V.suppress = 0;
         V.hpAt = 0; V.hpFireAt = 0; V.jumpGuard = JumpGuard();
         V.burnSeq = false; V.burnLockUntil = 0; V.crMPAt = 0; V.crHPAt = 0; V.odPunch = 0; V.odExtra = 0;
-        V.hkMPAt = 0; V.hkHPAt = 0; V.hkAASide = 0;
+        V.hkMPAt = 0; V.hkHPAt = 0; V.hkAASide = 0; V.szBurnExtra = 0;
         V.air = false; V.jumpAt = 0; V.jumpDir = 0; V.prevClean = 0;
     }
     // Returns true when the Viper engine owns the output this poll.
@@ -929,12 +930,13 @@ namespace {
                     V.suppress |= rising & (MP | HP);
                 }
             } else if (V.win == W_SZ && !V.winPick && now >= V.winAt + V_WIN_SZ_US) {
-                // Extended late HK-only window (17f..26f): punches close it cleanly; HK triggers burning kick
-                // trimming late frames past 18f off ↓/↘/→/↗ (min 1.2f each) so total time stays the same.
+                // Extended late HK-only window (17f..26f, or ..29f for raw seismo): punches close it cleanly;
+                // HK triggers burning kick, trimming late frames past burnAtUs off ↓/↘/→/↗ (min 1.2f each).
+                uint64_t burnAtUs = V_WIN_SZ_BURN_US + V.szBurnExtra;
                 if (rising & HK) {
                     V.suppress |= HK;
-                    if (now >= V.winAt + V_WIN_SZ_BURN_US && !V.playing && !otherMacroBusy) {
-                        uint64_t lateUs = now - (V.winAt + V_WIN_SZ_BURN_US);
+                    if (now >= V.winAt + burnAtUs && !V.playing && !otherMacroBusy) {
+                        uint64_t lateUs = now - (V.winAt + burnAtUs);
                         V.win = W_NONE; V.winPick = 0;
                         seqBurn(HK, lateUs);
                         startSeq(now, 0, 0);
@@ -952,11 +954,11 @@ namespace {
                 V.suppress |= want;               // window presses never reach the game
             }
             if (V.win != W_NONE) {
-                // MK: 10f/12f. HK: 12f (MK qcf OD burn: +5f = 17f). Seismo: 17f for punches, 18f for HK, 26f late HK expiry
+                // MK: 10f/12f. HK: 12f (MK qcf OD burn: +5f = 17f). Seismo: 17f punches, 18f/21f HK, 26f/29f late expiry
                 uint64_t endUs = V.win == W_MK ? V.winLen
                                : V.win == W_HK ? ((V.winPick & KICK_MASK) ? (V.winLen + 5ULL * FRAME_US) : V.winLen)
-                               : !V.winPick ? V_WIN_SZ_LATE_US
-                               : (V.winPick & KICK_MASK) ? V_WIN_SZ_BURN_US : V_WIN_SZ_US;
+                               : !V.winPick ? (V_WIN_SZ_LATE_US + V.szBurnExtra)
+                               : (V.winPick & KICK_MASK) ? (V_WIN_SZ_BURN_US + V.szBurnExtra) : V_WIN_SZ_US;
                 if (now >= V.winAt + endUs) {
                     VWin w = V.win; uint32_t b = V.winPick; int aaSidePick = V.hkAASide;
                     V.win = W_NONE; V.winPick = 0; V.hkMPAt = 0; V.hkHPAt = 0; V.hkAASide = 0;
@@ -1046,7 +1048,8 @@ namespace {
                 // after ↓ + HP: floor at ↓ + HP + 26f (smoothly drops to 0 at 26f+, burning kick always starts at 44f)
                 // after ↓ + MP (within 27f): auto-OD + 1f extra (total +2f with OD); manual OD: +1f
                 uint64_t winAt = now;
-                if (V.crHPAt && now < V.crHPAt + 26ULL * FRAME_US) {
+                bool fromCrHP = V.crHPAt && now < V.crHPAt + 26ULL * FRAME_US;
+                if (fromCrHP) {
                     winAt = V.crHPAt + 26ULL * FRAME_US;
                 }
                 V.crHPAt = 0;
@@ -1062,6 +1065,7 @@ namespace {
                 if (isOD) winAt += FRAME_US;      // OD seismo: +1f extra wait
                 if (fromCrMP) winAt += FRAME_US;  // ↓ + MP -> OD seismo: +1f more (total +2f)
                 V.win = W_SZ; V.winAt = winAt; V.winPick = 0; V.szMK = false;
+                V.szBurnExtra = (!fromCrHP && !fromCrMP) ? (3ULL * FRAME_US) : 0;   // raw seismo > burn: 21f (18f + 3f)
                 V.hpAt = 0;
                 seismoNow = true;
             } else if ((r & ATTACK_MASK) == HP && !(phys & ATTACK_MASK & ~HP)) {
@@ -1101,8 +1105,8 @@ namespace {
             if ((phys & V.odPunch) && !V.playing) gp->state.buttons |= V.odExtra;
             else { V.odExtra = 0; V.odPunch = 0; }
         }
-        // seismo window: hold → on frames 2-17 (2-18 if burning kick already picked); free during late HK window
-        uint64_t holdEnd = (V.winPick & KICK_MASK) ? V_WIN_SZ_BURN_US : V_WIN_SZ_US;
+        // seismo window: hold → on frames 2-17 (2-18/21 if burning kick already picked); free during late HK window
+        uint64_t holdEnd = (V.winPick & KICK_MASK) ? (V_WIN_SZ_BURN_US + V.szBurnExtra) : V_WIN_SZ_US;
         if (V.win == W_SZ && now >= V.winAt + FRAME_US && now < V.winAt + holdEnd) gp->state.dpad = toAbs(F_);
         if (V.burnout && now >= V.burnLockUntil) V.suppress |= (phys & XBTN);
         gp->state.buttons &= ~V.suppress;
